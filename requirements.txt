@@ -1,0 +1,7 @@
+Flask
+Flask-SocketIO
+python-socketio
+mutagen
+gunicorn
+eventlet
+uuid
