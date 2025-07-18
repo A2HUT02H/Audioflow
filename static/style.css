@@ -1,0 +1,356 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+
+:root {
+    --primary-color: #8c00ff; /* Blue 500 */
+    --secondary-color: #8c14b8; /* Teal 500 */
+    --background-color-start: #000000; /* Gray 900 */
+    --background-color-end: #000000; /* Gray 800 */
+    --surface-color: rgba(31, 41, 55, 0.6); /* Gray 800 with transparency */
+    --surface-border-color: rgba(75, 85, 99, 0.4); /* Gray 600 with transparency */
+    --text-color: #f3f4f6; /* Gray 100 */
+    --text-muted-color: #9ca3af; /* Gray 400 */
+    --accent-color: #9900ff; /* Amber 500 */
+    --shadow-color: rgba(0, 0, 0, 0.5);
+    --shadow-light-color: rgba(0, 0, 0, 0.3);
+}
+
+/* --- Universal Reset and Box-Sizing --- */
+*, *::before, *::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    background: linear-gradient(135deg, var(--background-color-start), var(--background-color-end));
+    color: var(--text-color);
+    font-family: 'Roboto', sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;      
+    padding: 0;         
+    overflow: hidden;   
+    margin: 0;          
+}
+
+
+.container {
+    background-color: var(--surface-color);
+    padding: 1.5rem;
+    border-radius: 24px;
+    border: 1px solid var(--surface-border-color);
+    box-shadow: 0 12px 45px var(--shadow-color);
+    width: 100%;
+    max-width: 400px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    backdrop-filter: blur(12px); /* Glassmorphism effect */
+    -webkit-backdrop-filter: blur(12px);
+    
+}
+
+.main-heading {
+    font-size: 34px;
+    font-weight: 700;
+    margin: 0;
+    background: linear-gradient(90deg, var(--primary-color), var(--secondary-color));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+#cover-art {
+    width: 220px;
+    height: 220px;
+    margin: 0 auto;
+    border-radius: 16px;
+    box-shadow: 0 8px 25px var(--shadow-light-color);
+    object-fit: cover;
+    transition: opacity 0.4s ease, transform 0.4s ease;
+    border: 1px solid var(--surface-border-color);
+    transition: opacity 0.4s ease, transform 0.4s ease, box-shadow 0.5s ease;
+}
+
+#file-name {
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--text-muted-color);
+    padding: 0.5rem 1rem;
+    background-color: rgba(28, 28, 28, 0.2);
+    border-radius: 12px;
+    min-height: 2.5em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1.4;
+    transition: color 0.3s ease, border-color 0.3s ease; /* Added border-color transition */
+    border: 2px solid transparent;
+}
+
+/* Add this rule to your style.css file */
+#file-name-text {
+    /* These three properties create the ellipsis effect */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+
+    /* Ensures the text doesn't push the "playing" indicator out of the box */
+    max-width: 90%; 
+}
+
+#file-name.playing {
+    border-color: var(--accent-color);
+}
+
+audio#player {
+    width: 100%;
+    accent-color: var(--primary-color);
+}
+
+.controls-section {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.upload-wrapper, .sync-wrapper {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+}
+
+.control-button {
+    flex-grow: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 0.8rem 1.4rem;
+    border: none;
+    border-radius: 12px;
+    background: linear-gradient(90deg, var(--primary-color), var(--secondary-color));
+    color: #ffffff;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease, background 0.5s ease, color 0.5s ease; /* Added 'color' transition */
+    box-shadow: 0 4px 15px var(--shadow-light-color);
+}
+
+.control-button:hover {
+    transform: translateY(-3px) scale(1.02);
+    box-shadow: 0 8px 25px var(--shadow-color);
+    filter: brightness(1.1);
+}
+
+.control-button:active {
+    transform: translateY(-1px) scale(1);
+    box-shadow: 0 4px 15px var(--shadow-light-color);
+    filter: brightness(1);
+}
+
+.control-button i {
+    font-size: 1rem;
+}
+
+.delay-control {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background-color: rgba(0, 0, 0, 0.2);
+    padding: 0.5rem 0.8rem;
+    border-radius: 12px;
+}
+
+label[for="delay-input"] {
+    color: var(--text-muted-color);
+    font-weight: 500;
+}
+
+#delay-input {
+    background: transparent;
+    border: none;
+    color: var(--text-color);
+    font-size: 1rem;
+    font-weight: 500;
+    width: 3rem;
+    text-align: center;
+    padding: 0.2rem;
+    border-radius: 6px;
+    transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+#delay-input:focus {
+    outline: none;
+    background-color: rgba(255, 255, 255, 0.1);
+    box-shadow: 0 0 0 2px var(--primary-color);
+}
+
+/* Now Playing Animation */
+.now-playing-indicator {
+    display: none;
+    justify-content: center;
+    align-items: flex-end;
+    width: 24px;
+    height: 18px;
+    gap: 3px;
+    margin-right: 10px;
+}
+
+#file-name.playing .now-playing-indicator {
+    display: flex; 
+}
+
+.now-playing-indicator .bar {
+    width: 3px;
+    height: 100%;
+    background: var(--accent-color);
+    animation: dance 1s linear infinite;
+    transform-origin: bottom;
+    border-radius: 2px;
+}
+
+@keyframes dance {
+    0%, 100% { transform: scaleY(0.2); }
+    50% { transform: scaleY(1.0); }
+}
+
+.now-playing-indicator .bar:nth-child(2) { animation-delay: -0.2s; }
+.now-playing-indicator .bar:nth-child(3) { animation-delay: -0.4s; }
+.now-playing-indicator .bar:nth-child(4) { animation-delay: -0.6s; }
+.now-playing-indicator .bar:nth-child(5) { animation-delay: -0.8s; }
+
+#file-name.playing #file-name-text {
+    color: var(--text-color);
+}
+
+/* Responsive adjustments */
+@media (max-width: 600px) {
+    /* No body changes needed due to box-sizing */
+    .container { 
+        padding: 1.5rem; 
+        gap: 1rem; 
+    }
+    .main-heading { font-size: 30px; }
+    .sync-wrapper { 
+        flex-direction: column; 
+        align-items: stretch; 
+        gap: 0.8rem; 
+    }
+    .delay-control { justify-content: center; }
+}
+
+/* --- Room Selection Page --- */
+.room-selection-container {
+    max-width: 450px;
+    gap: 1.5rem;
+}
+
+.sub-heading {
+    font-size: 1.2rem;
+    color: var(--text-muted-color);
+    margin-top: -10px;
+    font-weight: 400;
+}
+
+.room-actions {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 1rem;
+    align-items: center;
+}
+
+.divider {
+    font-weight: 500;
+    color: var(--text-muted-color);
+}
+
+.join-wrapper {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 1rem;
+}
+
+#room-id-input {
+    width: 100%;
+    padding: 0.8rem 1rem;
+    border-radius: 12px;
+    border: 1px solid var(--surface-border-color);
+    background-color: rgba(0, 0, 0, 0.2);
+    color: var(--text-color);
+    font-size: 1rem;
+    text-align: center;
+    transition: box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+#room-id-input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(140, 0, 255, 0.4);
+}
+
+.create-room-btn, .join-room-btn {
+    width: 100%;
+}
+
+
+/* --- Room Code Display on Player Page --- */
+.room-code-display {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: var(--text-color);
+    padding: 0.4rem 0.8rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    margin-top: 0.5rem;
+    border: 1px solid var(--surface-border-color);
+}
+
+.room-code-display span {
+    font-weight: 700;
+    color: var(--accent-color);
+    letter-spacing: 1px;
+}```
+
+/* --- New styles for Room Header Controls --- */
+
+.room-header-controls {
+    display: flex; /* This is the most important part! It aligns children in a row. */
+    justify-content: center; /* Centers the group in the middle of the page */
+    align-items: center; /* Vertically aligns the text and the button */
+    gap: 0.75rem; /* Adds a small space between the code and the button */
+    margin-top: 0.5rem;
+}
+
+.create-new-room-button {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%; /* Makes it circular */
+    background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+    color: white;
+    font-size: 22px;
+    font-weight: bold;
+    text-decoration: none;
+    line-height: 28px; /* Helps vertically align the '+' */
+    box-shadow: 0 2px 8px var(--shadow-light-color);
+    transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+
+.create-new-room-button:hover {
+    transform: scale(1.1);
+    filter: brightness(1.15);
+    box-shadow: 0 4px 12px var(--shadow-color);
+}
+
+.create-new-room-button:active {
+    transform: scale(1);
+    filter: brightness(1);
+}
