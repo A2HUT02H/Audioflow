@@ -324,7 +324,9 @@ label[for="delay-input"] {
 
 .room-code-display span {
     font-weight: 700;
-    color: var(--accent-color);
+    background: linear-gradient(to right, #66ccff, #99e6b3);
+    -webkit-text-fill-color: transparent;
+    -webkit-background-clip: text;
     letter-spacing: 1px;
 }
 
