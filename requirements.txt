@@ -4,4 +4,3 @@ python-socketio
 mutagen
 gunicorn
 eventlet
-uuid
