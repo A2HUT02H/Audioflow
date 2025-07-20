@@ -12,6 +12,7 @@
     --accent-color: #9900ff; /* Amber 500 */
     --shadow-color: rgba(0, 0, 0, 0.5);
     --shadow-light-color: rgba(0, 0, 0, 0.3);
+    --cover-art-color: #9900ff; /* Fallback color for cover art */
 }
 
 /* --- Universal Reset and Box-Sizing --- */
@@ -101,7 +102,17 @@ body {
 }
 
 #file-name.playing {
-    border-color: var(--accent-color);
+    border-color: var(--cover-art-color, var(--accent-color));
+    animation: playing-pulse 2s ease-in-out infinite;
+}
+
+@keyframes playing-pulse {
+    0%, 100% { 
+        box-shadow: 0 0 5px currentColor;
+    }
+    50% { 
+        box-shadow: 0 0 15px currentColor;
+    }
 }
 
 audio#player {
@@ -207,7 +218,7 @@ label[for="delay-input"] {
 .now-playing-indicator .bar {
     width: 3px;
     height: 100%;
-    background: var(--accent-color);
+    background: var(--cover-art-color, #9900ff); /* Fallback to accent color if cover art color is not set */
     animation: dance 1s linear infinite;
     transform-origin: bottom;
     border-radius: 2px;
@@ -315,7 +326,7 @@ label[for="delay-input"] {
     font-weight: 700;
     color: var(--accent-color);
     letter-spacing: 1px;
-}```
+}
 
 /* --- New styles for Room Header Controls --- */
 
