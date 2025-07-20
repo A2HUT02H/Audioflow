@@ -8,12 +8,10 @@
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
 </head>
-<!-- Add room_id as a data attribute to the body for easy access in JS -->
 <body data-room-id="{{ room_id }}">
     <div class="container">
         <header class="main-header">
             <h1 class="main-heading">AudioFlow Room</h1>
-            <!-- New wrapper to align the room code and the create button -->
             <div class="room-header-controls">
             <div class="room-header-controls" style="display: flex; align-items: center; justify-content: center; gap: 10px;">
                 <div class="room-code-display">Code: <span>{{ room_id }}</span></div>
@@ -46,7 +44,8 @@
                 <button id="upload-btn" class="control-button">
                     <i class="fas fa-upload"></i> Choose Audio
                 </button>
-                <input type="file" id="audio-input" accept="audio/*" style="display: none;">
+                <!-- FIX: Matching the 'accept' attribute to the allowed extensions in app.py -->
+                <input type="file" id="audio-input" accept=".mp3,.wav,.ogg,.flac,.m4a" style="display: none;">
             </div>
 
         <div class="sync-wrapper">
