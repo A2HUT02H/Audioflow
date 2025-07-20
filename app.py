@@ -1,3 +1,8 @@
+# --- CRITICAL: Eventlet monkey patching must happen first ---
+import eventlet
+eventlet.monkey_patch()
+
+# --- Standard Library Imports ---
 import os
 import time
 import mimetypes
@@ -5,32 +10,29 @@ import uuid
 import traceback
 from threading import Lock
 
+# --- Third-Party Imports ---
 from flask import Flask, render_template, request, redirect, url_for, send_from_directory, jsonify
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from mutagen import File as MutagenFile
-from mutagen.id3 import APIC as ID3APIC
-from mutagen.mp3 import MP3
-from mutagen.flac import FLAC, Picture
-from mutagen.mp4 import MP4, MP4Cover
+from mutagen.id3 import APIC
+from mutagen.mp4 import MP4Cover
 
 # --- App and Global Variable Setup ---
 thread_lock = Lock()
-
-UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 ALLOWED_EXTENSIONS = {'mp3', 'wav', 'ogg', 'flac', 'm4a'}
 
 app = Flask(__name__, static_url_path='/static')
 app.config['SECRET_KEY'] = 'secret!'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-socketio = SocketIO(app, async_mode='eventlet')
+socketio = SocketIO(app)
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# In-memory dictionary to hold the state of all rooms
 rooms = {}
 
-
 # =================================================================================
-# Function Definitions (Must come before they are called)
+# Function Definitions
 # =================================================================================
 
 def sync_rooms_periodically():
@@ -39,18 +41,75 @@ def sync_rooms_periodically():
         with thread_lock:
             for room_id in list(rooms.keys()):
                 room_state = rooms.get(room_id)
-                # Only sync rooms that are currently playing music
                 if room_state and room_state.get('is_playing'):
                     socketio.emit('server_sync', {
                         'audio_time': room_state['last_progress_s'],
                         'server_time': room_state['last_updated_at']
                     }, room=room_id)
-        socketio.sleep(3) # Sync every 3 seconds
+        socketio.sleep(3)
 
 def allowed_file(filename):
     """Check if the file's extension is in the allowed list."""
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def extract_cover_art(file_path):
+    """
+    Extracts cover art data and extension from an audio file.
+    Returns (cover_data, cover_ext) or (None, None) if not found.
+    """
+    try:
+        audio = MutagenFile(file_path)
+        if not audio:
+            print(f"[DEBUG] Mutagen could not open file: {file_path}")
+            return None, None
+
+        # MP4/M4A Files
+        if hasattr(audio, 'tags') and audio.tags:
+            if 'covr' in audio.tags:
+                covers = audio.tags['covr']
+                if covers:
+                    ext = 'png' if covers[0].imageformat == MP4Cover.FORMAT_PNG else 'jpg'
+                    print(f"[DEBUG] MP4 cover found, ext={ext}")
+                    return covers[0], ext
+
+        # FLAC Files
+        if hasattr(audio, 'pictures') and audio.pictures:
+            pic = audio.pictures[0]
+            ext = 'png' if 'png' in pic.mime else 'jpg'
+            print(f"[DEBUG] FLAC cover found, ext={ext}")
+            return pic.data, ext
+
+        # MP3 Files (ID3 Tags)
+        if hasattr(audio, 'tags') and audio.tags:
+            # Try APIC frames (standard for cover art)
+            for tag in audio.tags.keys():
+                if tag.startswith('APIC'):
+                    pic = audio.tags[tag]
+                    ext = 'png' if 'png' in pic.mime else 'jpg'
+                    print(f"[DEBUG] MP3 APIC cover found, ext={ext}")
+                    return pic.data, ext
+                if tag.startswith('PIC'):
+                    pic = audio.tags[tag]
+                    ext = 'png' if 'png' in pic.mime else 'jpg'
+                    print(f"[DEBUG] MP3 PIC cover found, ext={ext}")
+                    return pic.data, ext
+
+        # Direct attribute fallback for some formats
+        if hasattr(audio, 'APIC'):
+            pic = audio.APIC
+            ext = 'png' if 'png' in pic.mime else 'jpg'
+            print(f"[DEBUG] Direct APIC cover found, ext={ext}")
+            return pic.data, ext
+        if hasattr(audio, 'PIC'):
+            pic = audio.PIC
+            ext = 'png' if 'png' in pic.mime else 'jpg'
+            print(f"[DEBUG] Direct PIC cover found, ext={ext}")
+            return pic.data, ext
+
+        print(f"[DEBUG] No cover art found in file: {file_path}")
+    except Exception as e:
+        print(f"Could not extract cover art from {os.path.basename(file_path)}: {e}")
+    return None, None
 
 
 # =================================================================================
@@ -59,12 +118,9 @@ def allowed_file(filename):
 
 @app.route('/uploads/<path:filename>')
 def serve_file(filename):
-    """Serve uploaded files with support for range requests (streaming)."""
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    if not os.path.exists(file_path):
-        from flask import abort
-        abort(404)
+    """Serve uploaded files."""
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
 
 @app.route('/upload', methods=['POST'])
 def upload():
@@ -77,55 +133,34 @@ def upload():
         return jsonify({'success': False, 'error': 'No file part in the request'}), 400
 
     file = request.files['audio']
-    if file.filename == '':
-        return jsonify({'success': False, 'error': 'No file selected'}), 400
-
-    if not allowed_file(file.filename):
-        return jsonify({'success': False, 'error': f"File type not allowed. Please use one of: {', '.join(ALLOWED_EXTENSIONS)}"}), 400
+    if file.filename == '' or not allowed_file(file.filename):
+        return jsonify({'success': False, 'error': 'File not allowed or not selected'}), 400
 
     try:
         from werkzeug.utils import secure_filename
         filename = secure_filename(file.filename)
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(file_path)
+        print(f"[Room {room}] - File saved: {filename}")
 
         final_cover_filename = None
-        try:
-            audio = MutagenFile(file_path, easy=True) # Use easy=True for broad compatibility first
-            cover_data = None
-            cover_ext = 'jpg'
+        # --- Using the new, robust helper function ---
+        cover_data, cover_ext = extract_cover_art(file_path)
+        print(f"[DEBUG] Cover extraction result for '{filename}': cover_data={'YES' if cover_data else 'NO'}, cover_ext={cover_ext}")
+
+        if cover_data:
+            cover_filename = f"{os.path.splitext(filename)[0]}_cover.{cover_ext}"
+            cover_path = os.path.join(app.config['UPLOAD_FOLDER'], cover_filename)
+            with open(cover_path, 'wb') as imgf:
+                imgf.write(cover_data)
+            final_cover_filename = cover_filename
+            print(f"[Room {room}] - Cover art successfully extracted and saved as '{final_cover_filename}'.")
+            print(f"[DEBUG] Cover file saved at: {cover_path}")
+            print(f"[DEBUG] Cover file exists after save: {os.path.exists(cover_path)}")
+        else:
+            print(f"[Room {room}] - No cover art found or extracted.")
+        print(f"[DEBUG] Emitting new_file event with cover: {final_cover_filename}")
             
-            # This logic attempts to find cover art in various file types
-            if audio.mime and 'mp4' in audio.mime[0]:
-                if 'covr' in audio:
-                    cover_art_list = audio.get('covr', [])
-                    if cover_art_list:
-                         cover_data = cover_art_list[0]
-                         if cover_art_list[0].imageformat == MP4Cover.FORMAT_PNG:
-                            cover_ext = 'png'
-            elif audio.mime and 'flac' in audio.mime[0]:
-                if audio.pictures:
-                    cover_data = audio.pictures[0].data
-                    if 'png' in audio.pictures[0].mime:
-                        cover_ext = 'png'
-            elif audio.mime and 'mp3' in audio.mime[0]:
-                audio_raw = MutagenFile(file_path) # Re-open without easy=True for detailed tags
-                if 'APIC:' in audio_raw:
-                    apic = audio_raw['APIC:']
-                    cover_data = apic.data
-                    if 'png' in apic.mime:
-                        cover_ext = 'png'
-
-            if cover_data:
-                cover_filename = f"{os.path.splitext(filename)[0]}_cover.{cover_ext}"
-                cover_path = os.path.join(app.config['UPLOAD_FOLDER'], cover_filename)
-                with open(cover_path, 'wb') as imgf:
-                    imgf.write(cover_data)
-                final_cover_filename = cover_filename
-        except Exception as e:
-            print(f"WARNING: Non-fatal error extracting cover art for {filename}: {e}")
-
-        # Update the shared room state atomically
         with thread_lock:
             rooms[room].update({
                 'current_file': filename,
@@ -136,18 +171,20 @@ def upload():
             })
 
         socketio.emit('new_file', {'filename': filename, 'cover': final_cover_filename}, room=room)
-        socketio.emit('pause', {'time': 0}, room=room) # Explicitly reset all clients
+        socketio.emit('pause', {'time': 0}, room=room)
         
         return jsonify({'success': True, 'filename': filename})
 
     except Exception as e:
-        print("!!!!!!!!!!!!!!!! CRITICAL UPLOAD ERROR !!!!!!!!!!!!!!!!")
+        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        print(f"CRITICAL ERROR during file upload for room '{room}':")
         traceback.print_exc()
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         return jsonify({
             'success': False,
-            'error': 'An internal server error occurred while processing the file. The file may be corrupt.'
+            'error': 'A critical server error occurred. Please check the logs.'
         }), 500
+
 
 @app.route('/current_song')
 def get_current_song():
