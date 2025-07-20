@@ -217,6 +217,8 @@ document.addEventListener('DOMContentLoaded', () => {
         resetTheme();
 
         if (cover) {
+            coverArt.src = `/uploads/${cover}`;
+            coverArt.style.display = 'block';
             coverArt.onload = () => {
                 try {
                     const dominantColor = colorThief.getColor(coverArt);
@@ -232,8 +234,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 coverArt.style.display = 'none';
                 resetTheme();
             };
-            coverArt.src = `/uploads/${cover}`;
-            coverArt.style.display = 'block';
         } else {
             coverArt.src = '';
             coverArt.style.display = 'none';
