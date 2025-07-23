@@ -4,35 +4,92 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AudioFlow</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@100..900&display=swap" rel="stylesheet">
+
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@100..900&family=Noto+Sans+KR:wght@100..900&family=Noto+Sans:wght@100..900&family=Jost:wght@400;700&display=swap" rel="stylesheet">
     <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
 </head>
 <body data-room-id="{{ room_id }}">
+    <style>
+      body {
+        font-family: 'Noto Sans', 'Noto Sans JP', 'Noto Sans KR', sans-serif;
+      }
+      .main-heading {
+        font-family: 'Jost', Arial, sans-serif;
+      }
+    </style>
     <div class="container">
         <header class="main-header">
-            <h1 class="main-heading">AudioFlow Room</h1>
+            <h1 class="main-heading">AudioFlow</h1>
             <div class="room-header-controls">
             <div class="room-header-controls" style="display: flex; align-items: center; justify-content: center; gap: 10px;">
-                <div class="room-code-display">Code: <span>{{ room_id }}</span></div>
+                <span class="member-count"><i class="fa-solid fa-user-group"></i> {{ member_count if member_count is defined else 1 }}</span>
+                <div class="room-code-display">Room code: <span>{{ room_id }}</span></div>
                 <a href="{{ url_for('create_room') }}" class="create-new-room-button" title="Create New Room" style="margin-left: 10px;">+</a>
             </div>
         </div>
         </header>
 
         <div class="cover-section">
-            <img id="cover-art" src="" alt="Cover Art" style="display:none;" />
-        </div>
-
-        <div id="file-name" class="file-status">
-            <div class="now-playing-indicator">
-                <span class="bar"></span>
-                <span class="bar"></span>
+            <div class="cover-dancing-bars left">
                 <span class="bar"></span>
                 <span class="bar"></span>
                 <span class="bar"></span>
             </div>
+            <img id="cover-art" src="" alt="Cover Art" style="display:none;" />
+            <div class="cover-dancing-bars right">
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+            </div>
+        </div>
+
+        <div id="file-name" class="file-status">
             <span id="file-name-text">No file selected</span>
+            <script>
+            // Add 'long' class if file name is too long and set animation distance
+            function updateFileNameAnimation() {
+              var el = document.getElementById('file-name-text');
+              var container = document.getElementById('file-name');
+              if (!el || !container) return;
+
+              // Use requestAnimationFrame to ensure layout is calculated after DOM updates
+              requestAnimationFrame(() => {
+                // Reset animation first to recalculate properly
+                el.classList.remove('long');
+                container.classList.remove('is-overflowing');
+                el.style.removeProperty('--slide-distance');
+                
+                // Force a reflow
+                void el.offsetWidth;
+                
+                // Calculate available width (container width minus padding only - no dancing bars)
+                const containerWidth = container.offsetWidth;
+                const containerPadding = parseInt(getComputedStyle(container).paddingLeft) + parseInt(getComputedStyle(container).paddingRight);
+                
+                const availableWidth = containerWidth - containerPadding;
+                const textWidth = el.scrollWidth;
+                const isOverflowing = textWidth > availableWidth;
+
+                if (isOverflowing) {
+                  el.classList.add('long');
+                  container.classList.add('is-overflowing');
+                  // Calculate the distance needed to show the full text
+                  const distance = textWidth - availableWidth + 20; // Add 20px buffer
+                  el.style.setProperty('--slide-distance', '-' + distance + 'px');
+                  console.log(`Text sliding enabled: ${textWidth}px > ${availableWidth}px, distance: ${distance}px`);
+                } else {
+                  console.log(`Text fits: ${textWidth}px <= ${availableWidth}px`);
+                }
+              });
+            }
+            window.addEventListener('DOMContentLoaded', updateFileNameAnimation);
+            window.addEventListener('resize', updateFileNameAnimation);
+            // This function is now called from script.js on player state changes
+            </script>
         </div>
 
         <audio id="player" controls preload="auto">
