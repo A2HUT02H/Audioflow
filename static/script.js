@@ -1,440 +1,633 @@
-/* Animated sliding for long audio file names */
-@keyframes slide-horizontal {
-  0% { transform: translateX(0); }
-  15% { transform: translateX(0); }
-  45% { transform: translateX(var(--slide-distance, 0px)); }
-  65% { transform: translateX(var(--slide-distance, 0px)); }
-  85% { transform: translateX(0); }
-  100% { transform: translateX(0); }
-}
+document.addEventListener('DOMContentLoaded', () => {
+    // --- DOM Elements & Initial Setup ---
+    const socket = io();
+    const colorThief = new ColorThief();
+    const player = document.getElementById('player');
+    const audioInput = document.getElementById('audio-input');
+    const uploadBtn = document.getElementById('upload-btn');
+    const syncBtn = document.getElementById('sync-btn');
+    const fileNameDisplay = document.getElementById('file-name');
+    const fileNameText = document.getElementById('file-name-text');
+    const coverArt = document.getElementById('cover-art');
+    const controlButtons = document.querySelectorAll('.control-button');
+    const coverDancingBarsLeft = document.querySelector('.cover-dancing-bars.left');
+    const coverDancingBarsRight = document.querySelector('.cover-dancing-bars.right');
 
-#file-name-text.long {
-  animation: slide-horizontal 8s ease-in-out infinite;
-  overflow: visible; 
-  text-overflow: clip; 
-}
+    // --- State & Configuration ---
+    const roomId = document.body.dataset.roomId;
+    let isReceivingUpdate = false;
+    let userHasJustSeeked = false;
+    let seekDebounceTimer = null;
+    let pingInterval;
+    let currentDominantColor = null;
+    let themeUpdateTimeout;
 
-/* Ensure the animation continues smoothly when playing state changes */
-#file-name.playing #file-name-text.long {
-  animation: slide-horizontal 8s ease-in-out infinite;
-}
+    let serverTimeOffset = 0;
 
-/* Use Inter font for button text */
-.control-button, .upload-wrapper button, .sync-wrapper button, .create-new-room-button {
-  font-family: 'Inter', Arial, sans-serif;
-}
-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+    const MAX_ALLOWED_DRIFT_S = 0.5;
+    const PLAYBACK_RATE_ADJUST = 0.05;
 
-:root {
-    --primary-color: #ff3232; /* Blue 500 */
-    --secondary-color: #ff3dab; /* Teal 500 */
-    --background-color-start: #000000; /* Gray 900 */
-    --background-color-end: #000000; /* Gray 800 */
-    --surface-color: rgba(31, 41, 55, 0.6); /* Gray 800 with transparency */
-    --surface-border-color: rgba(75, 85, 99, 0.4); /* Gray 600 with transparency */
-    --text-color: #f3f4f6; /* Gray 100 */
-    --text-muted-color: #9ca3af; /* Gray 400 */
-    --accent-color: #ff45b8; /* Amber 500 */
-    --shadow-color: rgba(0, 0, 0, 0.5);
-    --shadow-light-color: rgba(0, 0, 0, 0.3);
-    --cover-art-color: #242424; /* Fallback color for cover art */
-}
+    // --- Audio Visualizer Setup ---
+    let audioContext = null;
+    let analyser = null;
+    let dataArray = null;
+    let source = null;
+    let animationId = null;
+    let visualizerInterval = null;
 
-/* --- Universal Reset and Box-Sizing --- */
-*, *::before, *::after {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-}
+    // =================================================================================
+    // Clock Synchronization
+    // =================================================================================
+    function syncClock() {
+        const startTime = Date.now();
+        socket.emit('client_ping');
+        socket.once('server_pong', (data) => {
+            const roundTripTime = Date.now() - startTime;
+            const serverTime = data.timestamp * 1000;
+            const estimatedServerTime = serverTime + (roundTripTime / 2);
+            serverTimeOffset = estimatedServerTime - Date.now();
+            console.log(`Clock synced. RTT: ${roundTripTime}ms, Offset: ${serverTimeOffset.toFixed(2)}ms`);
+        });
+    }
 
-body {
-    background: linear-gradient(135deg, var(--background-color-start), var(--background-color-end));
-    color: var(--text-color);
-    font-family: 'Noto Sans', sans-serif;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;      
-    padding: 0;         
-    overflow: hidden;   
-    margin: 0;          
-}
+    // =================================================================================
+    // Audio Visualizer Functions
+    // =================================================================================
 
+    function initAudioContext() {
+        if (!audioContext) {
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 256; // Increased from 64 for better frequency resolution
+                analyser.smoothingTimeConstant = 0.3; // Reduced from 0.8 for more responsiveness
+                analyser.minDecibels = -90; // Lower threshold for quiet sounds
+                analyser.maxDecibels = -10; // Higher threshold for loud sounds
+                
+                const bufferLength = analyser.frequencyBinCount;
+                dataArray = new Uint8Array(bufferLength);
+                
+                console.log('Audio context initialized for visualizer with enhanced sensitivity');
+            } catch (e) {
+                console.error('Could not initialize audio context:', e);
+            }
+        }
+    }
 
-.container {
-    background-color: var(--surface-color);
-    padding: 1.5rem;
-    border-radius: 24px;
-    border: 1px solid var(--surface-border-color);
-    box-shadow: 0 12px 45px var(--shadow-color);
-    width: 100%;
-    max-width: 400px;
-    text-align: center;
-    display: flex;
-    flex-direction: column;
-    gap: 0.8rem;
-    backdrop-filter: blur(12px); /* Glassmorphism effect */
-    -webkit-backdrop-filter: blur(12px);
+    function connectAudioSource() {
+        if (audioContext && analyser && !source) {
+            try {
+                source = audioContext.createMediaElementSource(player);
+                source.connect(analyser);
+                source.connect(audioContext.destination);
+                console.log('Audio source connected to visualizer');
+            } catch (e) {
+                console.error('Could not connect audio source:', e);
+                // If source already exists, it might be disconnected, try to reconnect
+                if (source) {
+                    try {
+                        source.connect(analyser);
+                        source.connect(audioContext.destination);
+                        console.log('Audio source reconnected to visualizer');
+                    } catch (reconnectError) {
+                        console.error('Could not reconnect audio source:', reconnectError);
+                    }
+                }
+            }
+        } else if (audioContext && analyser && source) {
+            // Source already exists, make sure it's connected
+            try {
+                source.connect(analyser);
+                source.connect(audioContext.destination);
+                console.log('Existing audio source reconnected');
+            } catch (e) {
+                console.log('Source already connected or connection failed:', e.message);
+            }
+        }
+    }
+
+    function ensureAudioConnection() {
+        console.log('ensureAudioConnection called');
+        // Ensure audio context is active and connected
+        if (audioContext && source && analyser) {
+            try {
+                // Check if context is suspended and resume if needed
+                if (audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+                console.log('Audio connection verified after seek');
+            } catch (e) {
+                console.error('Error ensuring audio connection:', e);
+            }
+        } else {
+            console.log('Reconnecting audio source: context:', !!audioContext, 'source:', !!source, 'analyser:', !!analyser);
+            // Reconnect if something is missing
+            connectAudioSource();
+        }
+    }
+
+    function updateVisualizerBars() {
+        if (!analyser || !dataArray) {
+            console.log('Visualizer not running: analyser or dataArray missing');
+            return;
+        }
+        
+        analyser.getByteFrequencyData(dataArray);
+        
+        // Calculate overall audio loudness (RMS of all frequencies)
+        const squaredSum = dataArray.reduce((sum, value) => sum + (value * value), 0);
+        const rms = Math.sqrt(squaredSum / dataArray.length);
+        
+        // Normalize to 0-1 range
+        const normalized = rms / 255;
+        
+        // Apply exponential curve for better small-signal response
+        const exponential = Math.pow(normalized, 0.6); // Lower exponent = more sensitive
+        
+        // Amplify small signals
+        const loudness = Math.min(1, exponential * 2.5); // 2.5x amplification
+        
+        // Map audio levels: 50% audio = 0% bar, 100% audio = 100% bar
+        let barLevel = 0;
+        if (loudness > 0.5) {
+            // Audio is above 50%, map 50-100% audio to 0-100% bar height
+            barLevel = (loudness - 0.5) / 0.5; // Maps 0.5-1.0 to 0.0-1.0
+        }
+        // If loudness <= 0.5, barLevel stays 0 (no animation)
+        
+        // Debug log every 60 frames (about once per second at 60fps)
+        if (Math.random() < 0.016) { // ~1/60 chance
+            console.log(`Audio loudness: ${(loudness * 100).toFixed(1)}%, bar level: ${(barLevel * 100).toFixed(1)}%`);
+        }
+        
+        // Define max heights for each bar (different sizes for visual variety)
+        const maxHeights = {
+            bass: 120,   // Tallest bar (closest to image)
+            mid: 80,     // Medium bar
+            treble: 50   // Shortest bar (farthest from image)
+        };
+        
+        // Define minimum heights (shown when no animation)
+        const minHeights = {
+            bass: 20,    // Minimum height for bass bar
+            mid: 15,     // Minimum height for mid bar
+            treble: 10   // Minimum height for treble bar
+        };
+        
+        // Calculate heights: minimum + (barLevel * range)
+        const bassHeight = minHeights.bass + (barLevel * (maxHeights.bass - minHeights.bass));
+        const midHeight = minHeights.mid + (barLevel * (maxHeights.mid - minHeights.mid));
+        const trebleHeight = minHeights.treble + (barLevel * (maxHeights.treble - minHeights.treble));
+        
+        // Update left bars (reverse order: bass closest to image)
+        const leftBars = coverDancingBarsLeft.querySelectorAll('.bar');
+        if (leftBars.length >= 3) {
+            leftBars[2].style.height = `${bassHeight}px`;    // Bass (closest)
+            leftBars[1].style.height = `${midHeight}px`;     // Mid
+            leftBars[0].style.height = `${trebleHeight}px`;  // Treble (farthest)
+        }
+        
+        // Update right bars (normal order: bass closest to image)
+        const rightBars = coverDancingBarsRight.querySelectorAll('.bar');
+        if (rightBars.length >= 3) {
+            rightBars[0].style.height = `${bassHeight}px`;    // Bass (closest)
+            rightBars[1].style.height = `${midHeight}px`;     // Mid
+            rightBars[2].style.height = `${trebleHeight}px`;  // Treble (farthest)
+        }
+        
+        // Continue animation while playing
+        if (!player.paused) {
+            animationId = requestAnimationFrame(updateVisualizerBars);
+        } else {
+            console.log('Visualizer stopped: player is paused');
+            animationId = null;
+            if (visualizerInterval) {
+                clearInterval(visualizerInterval);
+                visualizerInterval = null;
+            }
+        }
+    }
+
+    function startVisualizer() {
+        console.log('startVisualizer called');
+        if (audioContext && audioContext.state === 'suspended') {
+            audioContext.resume();
+            console.log('Audio context resumed');
+        }
+        ensureAudioConnection();
+        
+        // Cancel any existing animation frame first
+        if (animationId) {
+            cancelAnimationFrame(animationId);
+            animationId = null;
+        }
+        
+        if (!player.paused) {
+            console.log('Starting visualizer animation loop');
+            updateVisualizerBars();
+            
+            // Also start a backup interval to ensure animation continues
+            if (!visualizerInterval) {
+                visualizerInterval = setInterval(() => {
+                    if (!animationId && !player.paused) {
+                        console.log('Backup interval restarting animation');
+                        updateVisualizerBars();
+                    }
+                }, 100); // Check every 100ms
+            }
+        } else {
+            console.log(`Visualizer not started: paused=${player.paused}`);
+        }
+    }
+
+    function stopVisualizer() {
+        if (animationId) {
+            cancelAnimationFrame(animationId);
+            animationId = null;
+        }
+        
+        if (visualizerInterval) {
+            clearInterval(visualizerInterval);
+            visualizerInterval = null;
+        }
+        
+        // Reset bars to minimum heights (no animation)
+        const allBars = document.querySelectorAll('.cover-dancing-bars .bar');
+        allBars.forEach((bar, index) => {
+            // Reset to minimum heights (when audio is below 50%)
+            if (bar.closest('.left')) {
+                if (index === 0) bar.style.height = '10px'; // Treble minimum
+                else if (index === 1) bar.style.height = '15px'; // Mid minimum
+                else if (index === 2) bar.style.height = '20px'; // Bass minimum
+            } else {
+                if (index === 0) bar.style.height = '20px'; // Bass minimum
+                else if (index === 1) bar.style.height = '15px'; // Mid minimum
+                else if (index === 2) bar.style.height = '10px'; // Treble minimum
+            }
+        });
+    }
+
+    // =================================================================================
+    // User Action Event Listeners
+    // =================================================================================
+
+    if (uploadBtn && audioInput) {
+        uploadBtn.addEventListener('click', () => audioInput.click());
+
+        audioInput.addEventListener('change', () => {
+            const file = audioInput.files[0];
+            if (!file) return;
+
+            fileNameText.textContent = `Uploading: ${file.name}`;
+            const formData = new FormData();
+            formData.append('audio', file);
+            formData.append('room', roomId);
+
+            fetch('/upload', { method: 'POST', body: formData })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        console.log('Upload successful. Waiting for new_file event.');
+                    } else {
+                        alert(data.error || 'Upload failed.');
+                        fileNameText.textContent = 'Upload failed.';
+                    }
+                }).catch(error => {
+                    alert('An unexpected error occurred during upload.');
+                    console.error('Upload fetch error:', error);
+                    fileNameText.textContent = 'Upload error.';
+                });
+        });
+    }
+
+    if (syncBtn) {
+        syncBtn.addEventListener('click', () => {
+            if (!player.src || player.src.endsWith('/null')) return;
+            console.log('--- User initiated manual sync ---');
+            socket.emit('sync', { room: roomId, time: player.currentTime });
+        });
+    }
+
+    player.addEventListener('play', () => {
+        if (isReceivingUpdate) return;
+        fileNameDisplay.classList.add('playing');
+        // Force re-init and connection for visualizer
+        initAudioContext();
+        connectAudioSource();
+        showCoverDancingBars();
+        updateFileNameAnimation(); // Recalculate for playing state
+        // Debug log to confirm visualizer start
+        console.log('Play event: visualizer should start, bars should animate.');
+        socket.emit('play', { room: roomId, time: player.currentTime });
+    });
+
+    player.addEventListener('pause', () => {
+        if (isReceivingUpdate || player.seeking) return;
+        player.playbackRate = 1.0;
+        fileNameDisplay.classList.remove('playing');
+        hideCoverDancingBars();
+        updateFileNameAnimation(); // Recalculate for paused state
+        socket.emit('pause', { room: roomId });
+    });
+
+    player.addEventListener('seeking', () => {
+        // Pause visualizer during seeking to prevent conflicts
+        if (animationId) {
+            cancelAnimationFrame(animationId);
+            animationId = null;
+        }
+    });
+
+    player.addEventListener('seeked', () => {
+        if (isReceivingUpdate) return;
+        
+        // Ensure audio visualizer connection is maintained after seek
+        ensureAudioConnection();
+        
+        // Restart visualizer if audio is playing
+        if (!player.paused && !animationId) {
+            updateVisualizerBars();
+        }
+        
+        socket.emit('seek', { room: roomId, time: player.currentTime });
+        userHasJustSeeked = true;
+        clearTimeout(seekDebounceTimer);
+        seekDebounceTimer = setTimeout(() => {
+            userHasJustSeeked = false;
+        }, 2000);
+    });
+
+    // Initialize audio context on first user interaction
+    function enableAudioContext() {
+        initAudioContext();
+        document.removeEventListener('click', enableAudioContext);
+        document.removeEventListener('keydown', enableAudioContext);
+    }
+    document.addEventListener('click', enableAudioContext);
+    document.addEventListener('keydown', enableAudioContext);
+
+    // =================================================================================
+    // Socket.IO Event Handlers (Commands from Server)
+    // =================================================================================
+
+    socket.on('connect', () => {
+        console.log('Connected! Joining room:', roomId);
+        socket.emit('join', { room: roomId });
+        syncClock();
+        if (pingInterval) clearInterval(pingInterval);
+        pingInterval = setInterval(syncClock, 15000);
+    });
+
+    socket.on('scheduled_play', (data) => {
+        isReceivingUpdate = true;
+        const targetTimestamp = (data.target_timestamp * 1000) + serverTimeOffset;
+        const delay = targetTimestamp - Date.now();
+        player.currentTime = data.audio_time;
+        
+        fileNameDisplay.classList.add('playing');
+        showCoverDancingBars();
+        updateFileNameAnimation(); // Recalculate layout for playing state
+        updateThemeForPlayingState();
+        
+        if (delay > 0) {
+            setTimeout(() => player.play(), delay);
+        } else {
+            player.play();
+        }
+        
+        setTimeout(() => { isReceivingUpdate = false; }, delay > 0 ? delay + 100 : 100);
+    });
+
+    socket.on('pause', (data) => {
+        isReceivingUpdate = true;
+        player.pause();
+        player.playbackRate = 1.0;
+        player.currentTime = data.time;
+        fileNameDisplay.classList.remove('playing');
+        hideCoverDancingBars();
+        updateFileNameAnimation(); // Recalculate layout for paused state
+        updateThemeForPlayingState();
+        setTimeout(() => { isReceivingUpdate = false; }, 150);
+    });
+
+    socket.on('new_file', (data) => {
+        loadAudio(data.filename, data.cover);
+    });
+
+    socket.on('room_state', (data) => {
+        if (data.current_file) {
+            loadAudio(data.current_file, data.current_cover);
+            let intendedTime = data.last_progress_s;
+            if (data.is_playing) {
+                const timeSinceUpdate = (Date.now() + serverTimeOffset) / 1000 - data.last_updated_at;
+                intendedTime += timeSinceUpdate;
+                const delay = 500; // Join buffer
+                isReceivingUpdate = true;
+                player.currentTime = intendedTime;
+                
+                fileNameDisplay.classList.add('playing');
+                showCoverDancingBars();
+                updateFileNameAnimation(); // Recalculate layout for playing state
+                updateThemeForPlayingState();
+                
+                setTimeout(() => player.play(), delay);
+                setTimeout(() => { isReceivingUpdate = false; }, delay + 100);
+            } else {
+                player.currentTime = intendedTime;
+                player.pause();
+                hideCoverDancingBars();
+                updateFileNameAnimation(); // Recalculate layout for paused state
+            }
+        }
+    });
+
+    socket.on('member_count_update', (data) => {
+        updateMemberCount(data.count);
+    });
+
+    socket.on('server_sync', (data) => {
+        if (userHasJustSeeked || player.paused || isReceivingUpdate || player.seeking) {
+            return;
+        }
+        const timeSinceServerUpdate = ((Date.now() + serverTimeOffset) / 1000) - data.server_time;
+        const serverProgress = data.audio_time + timeSinceServerUpdate;
+        const clientProgress = player.currentTime;
+        const drift = clientProgress - serverProgress;
+
+        if (Math.abs(drift) > MAX_ALLOWED_DRIFT_S) {
+            player.currentTime = serverProgress;
+            player.playbackRate = 1.0;
+        } else if (Math.abs(drift) > 0.08) {
+            player.playbackRate = (drift > 0) ? 1.0 - PLAYBACK_RATE_ADJUST : 1.0 + PLAYBACK_RATE_ADJUST;
+        } else {
+            player.playbackRate = 1.0;
+        }
+    });
+
+    socket.on('error', (data) => {
+        alert(data.message);
+        window.location.href = '/';
+    });
+
+    // =================================================================================
+    // UI & Theme Helper Functions
+    // =================================================================================
     
-}
+    function loadAudio(filename, cover) {
+        if (!filename) {
+            fileNameText.textContent = "No file selected.";
+            updateFileNameAnimation();
+            return;
+        }
+        fileNameText.title = filename.replace(/_/g, " ");
+        fileNameText.textContent = filename.replace(/_/g, " ");
+        player.src = `/uploads/${filename}`;
+        
+        player.load();
+        
+        fileNameDisplay.classList.remove('playing');
+        coverArt.style.boxShadow = 'none';
+        hideCoverDancingBars();
+        resetTheme();
+        updateFileNameAnimation(); // Check for overflow and apply animation if needed for new file
 
-.main-heading {
-    font-size: 60px;
-    font-weight: 700;
-    margin: 0;
-    background: linear-gradient(90deg, var(--primary-color), var(--secondary-color));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-}
-
-#cover-art {
-    width: 220px;
-    height: 220px;
-    margin: 0 auto;
-    border-radius: 16px;
-    box-shadow: 0 8px 25px var(--shadow-light-color);
-    object-fit: cover;
-    transition: opacity 0.4s ease, transform 0.4s ease;
-    border: 1px solid var(--surface-border-color);
-    transition: opacity 0.4s ease, transform 0.4s ease, box-shadow 0.5s ease;
-}
-
-/* FIX: Container is now a stable flexbox parent */
-#file-name {
-    font-size: 1rem;
-    font-weight: 500;
-    color: var(--text-muted-color);
-    padding: 0.5rem 1rem;
-    background-color: rgba(28, 28, 28, 0.2);
-    border-radius: 12px;
-    min-height: 2.5em;
-    display: flex;
-    align-items: center;
-    justify-content: center; /* Center by default */
-    line-height: 1.4;
-    transition: color 0.3s ease, border-color 0.3s ease;
-    border: 2px solid transparent;
-    overflow: hidden;
-    position: relative; /* For proper mask positioning */
-}
-
-/* When text is overflowing and needs to slide, align to start */
-#file-name.is-overflowing {
-    justify-content: flex-start; /* Left align for sliding animation */
-}
-
-/* NEW: This wrapper contains the indicator and text, and moves as one unit */
-.file-name-wrapper {
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    min-width: 0;
-    flex: 1;
-}
-
-#file-name-text {
-    white-space: nowrap;
-    text-overflow: clip; 
-    overflow: visible;
-    flex-shrink: 0; /* Don't shrink the text, let it slide instead */
-    min-width: 0;
-}
-
-#file-name.is-overflowing {
-    justify-content: flex-start; /* Left align for sliding animation */
-    /* Use a wider fade to look smoother */
-    -webkit-mask-image: linear-gradient(to right, transparent, black 8%, black 92%, transparent);
-    mask-image: linear-gradient(to right, transparent, black 8%, black 92%, transparent);
-}
-
-
-#file-name.playing {
-    border-color: var(--cover-art-color, var(--accent-color));
-    animation: playing-pulse 2s ease-in-out infinite;
-}
-
-
-@keyframes playing-pulse {
-    0%, 100% { 
-        box-shadow: 0 0 5px currentColor;
+        if (cover) {
+            coverArt.src = `/uploads/${cover}`;
+            coverArt.style.display = 'block';
+            coverArt.onload = () => {
+                try {
+                    const dominantColor = colorThief.getColor(coverArt);
+                    currentDominantColor = dominantColor;
+                    const [r, g, b] = dominantColor;
+                    coverArt.style.boxShadow = `0 0 15px rgba(${r},${g},${b},0.6), 0 0 35px rgba(${r},${g},${b},0.4)`;
+                    applyTheme(dominantColor);
+                } catch (e) {
+                    resetTheme();
+                }
+            };
+            coverArt.onerror = () => {
+                coverArt.style.display = 'none';
+                resetTheme();
+            };
+        } else {
+            coverArt.src = '';
+            coverArt.style.display = 'none';
+            currentDominantColor = null;
+            resetTheme();
+        }
     }
-    50% { 
-        box-shadow: 0 0 15px currentColor;
+
+    function showCoverDancingBars() {
+        console.log('showCoverDancingBars called');
+        if (coverDancingBarsLeft) {
+            coverDancingBarsLeft.classList.add('visible');
+            console.log('Left bars made visible');
+        } else {
+            console.log('ERROR: coverDancingBarsLeft not found');
+        }
+        if (coverDancingBarsRight) {
+            coverDancingBarsRight.classList.add('visible');
+            console.log('Right bars made visible');
+        } else {
+            console.log('ERROR: coverDancingBarsRight not found');
+        }
+        
+        // Initialize audio context and start visualizer
+        initAudioContext();
+        startVisualizer();
     }
-}
 
-audio#player {
-    width: 100%;
-    accent-color: var(--primary-color);
-}
-
-.controls-section {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-}
-
-.upload-wrapper, .sync-wrapper {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 1rem;
-}
-
-.control-button {
-    flex-grow: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.75rem;
-    padding: 0.8rem 1.4rem;
-    border: none;
-    border-radius: 12px;
-    background: linear-gradient(90deg, var(--primary-color), var(--secondary-color));
-    color: #ffffff;
-    font-size: 1rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: transform 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease, background 0.5s ease, color 0.5s ease; /* Added 'color' transition */
-    box-shadow: 0 4px 15px var(--shadow-light-color);
-}
-
-.control-button:hover {
-    transform: translateY(-3px) scale(1.02);
-    box-shadow: 0 8px 25px var(--shadow-color);
-    filter: brightness(1.1);
-}
-
-.control-button:active {
-    transform: translateY(-1px) scale(1);
-    box-shadow: 0 4px 15px var(--shadow-light-color);
-    filter: brightness(1);
-}
-
-.control-button i {
-    font-size: 1rem;
-}
-
-.delay-control {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    background-color: rgba(0, 0, 0, 0.2);
-    padding: 0.5rem 0.8rem;
-    border-radius: 12px;
-}
-
-label[for="delay-input"] {
-    color: var(--text-muted-color);
-    font-weight: 500;
-}
-
-
-/* Cover Art Dancing Bars - New Effect */
-.cover-section {
-    position: relative;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    width: 100%;
-    padding: 0 50px; /* Add padding to ensure bars stay inside container */
-}
-
-.cover-dancing-bars {
-    display: none;
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    flex-direction: row; /* Changed to horizontal arrangement */
-    align-items: center; /* Vertically center all bars */
-    gap: 3px;
-    z-index: 1;
-}
-
-.cover-dancing-bars.left {
-    left: calc(50% - 110px - 10px - 15px); /* Center minus half image width minus gap minus bar group width */
-}
-
-.cover-dancing-bars.right {
-    right: calc(50% - 110px - 10px - 15px); /* Center minus half image width minus gap minus bar group width */
-}
-
-.cover-dancing-bars.visible {
-    display: flex;
-}
-
-.cover-dancing-bars .bar {
-    width: 3px;
-    background: var(--current-border-color, var(--accent-color));
-    transform-origin: bottom; /* Scale from bottom for natural look */
-    border-radius: 2px;
-    box-shadow: 0 0 8px var(--current-border-color, var(--accent-color));
-    align-self: center; /* Vertically center each bar within the flex container */
-    transition: height 0.05s ease-out; /* Much faster transitions for better responsiveness */
-}
-
-/* Default heights for visualizer bars - minimum heights when audio is below 50% */
-.cover-dancing-bars.left .bar:nth-child(1) { 
-    height: 10px; /* Treble - minimum height */
-}
-.cover-dancing-bars.left .bar:nth-child(2) { 
-    height: 15px; /* Mid - minimum height */
-}
-.cover-dancing-bars.left .bar:nth-child(3) { 
-    height: 20px; /* Bass - minimum height */
-}
-
-.cover-dancing-bars.right .bar:nth-child(1) { 
-    height: 20px; /* Bass - minimum height */
-}
-.cover-dancing-bars.right .bar:nth-child(2) { 
-    height: 15px; /* Mid - minimum height */
-}
-.cover-dancing-bars.right .bar:nth-child(3) { 
-    height: 10px; /* Treble - minimum height */
-}
-
-/* Remove the old static animation - now using dynamic visualizer */
-/*
-@keyframes cover-dance {
-    0%, 100% { 
-        transform: scaleY(0.3);
-        opacity: 0.6;
+    function hideCoverDancingBars() {
+        if (coverDancingBarsLeft) coverDancingBarsLeft.classList.remove('visible');
+        if (coverDancingBarsRight) coverDancingBarsRight.classList.remove('visible');
+        
+        // Stop visualizer
+        stopVisualizer();
     }
-    50% { 
-        transform: scaleY(1.0);
-        opacity: 1;
+
+    function updateThemeForPlayingState() {
+        clearTimeout(themeUpdateTimeout);
+        themeUpdateTimeout = setTimeout(() => {
+            if (currentDominantColor) {
+                applyTheme(currentDominantColor);
+            } else {
+                resetTheme();
+            }
+        }, 60);
     }
-}
-*/
-
-#file-name.playing #file-name-text {
-    color: var(--text-color);
-}
-
-/* Responsive adjustments */
-@media (max-width: 600px) {
-    /* No body changes needed due to box-sizing */
-    .container { 
-        padding: 1.5rem; 
-        gap: 1rem; 
+    
+    function getBrightness(r, g, b) {
+        return (r * 299 + g * 587 + b * 114) / 1000;
     }
-    .main-heading { font-size: 30px; }
-    .sync-wrapper { 
-        flex-direction: column; 
-        align-items: stretch; 
-        gap: 0.8rem; 
+
+    function applyTheme(c) {
+        const [r, g, b] = c;
+        const isDarkColor = getBrightness(r, g, b) < 50;
+        const textColor = getBrightness(r, g, b) > 140 ? '#000' : '#FFF';
+        const gradient = `linear-gradient(90deg,rgb(${r},${g},${b}),rgb(${Math.min(255,r+40)},${Math.min(255,g+40)},${Math.min(255,b+40)}))`;
+
+        if (fileNameDisplay.classList.contains('playing')) {
+            if (isDarkColor) {
+                fileNameDisplay.style.borderColor = 'var(--accent-color)';
+                // Update CSS custom property for playing-pulse animation
+                document.documentElement.style.setProperty('--current-border-color', 'var(--accent-color)');
+            } else {
+                fileNameDisplay.style.borderColor = `rgb(${r},${g},${b})`;
+                // Update CSS custom property for playing-pulse animation
+                document.documentElement.style.setProperty('--current-border-color', `rgb(${r},${g},${b})`);
+            }
+        } else {
+            fileNameDisplay.style.borderColor = '';
+            document.documentElement.style.removeProperty('--current-border-color');
+        }
+
+        if (isDarkColor) {
+            controlButtons.forEach(e => {
+                e.style.background = '';
+                e.style.color = ''
+            });
+            if (fileNameDisplay.classList.contains('playing')) {
+                document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => bar.style.background = 'var(--accent-color)');
+                document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => bar.style.boxShadow = '0 0 8px var(--accent-color)');
+            } else {
+                document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => bar.style.background = '');
+                document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => bar.style.boxShadow = '');
+            }
+            return;
+        }
+
+        controlButtons.forEach(e => {
+            e.style.background = gradient;
+            e.style.color = textColor
+        });
+        if (fileNameDisplay.classList.contains('playing')) {
+            document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => bar.style.background = gradient);
+            document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => bar.style.boxShadow = `0 0 8px rgb(${r},${g},${b})`);
+        } else {
+            document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => bar.style.background = '');
+            document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => bar.style.boxShadow = '');
+        }
     }
-    .delay-control { justify-content: center; }
-}
 
-/* --- Room Selection Page --- */
-.room-selection-container {
-    max-width: 450px;
-    gap: 1.5rem;
-}
+    function resetTheme() {
+        controlButtons.forEach(e => {
+            e.style.background = '';
+            e.style.color = ''
+        });
+        document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => {
+            bar.style.background = '';
+            bar.style.boxShadow = '';
+        });
+        fileNameDisplay.style.borderColor = '';
+        document.documentElement.style.removeProperty('--current-border-color');
+        currentDominantColor = null;
+    }
 
-.sub-heading {
-    font-size: 1.2rem;
-    color: var(--text-muted-color);
-    margin-top: -10px;
-    font-weight: 400;
-}
-
-.room-actions {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    gap: 1rem;
-    align-items: center;
-}
-
-.divider {
-    font-weight: 500;
-    color: var(--text-muted-color);
-}
-
-.join-wrapper {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    gap: 1rem;
-}
-
-#room-id-input {
-    width: 100%;
-    padding: 0.8rem 1rem;
-    border-radius: 12px;
-    border: 1px solid var(--surface-border-color);
-    background-color: rgba(255, 75, 135, 0);
-    color: var(--text-color);
-    font-size: 1rem;
-    text-align: center;
-    transition: box-shadow 0.3s ease, border-color 0.3s ease;
-}
-
-#room-id-input:focus {
-    outline: none;
-    border-color: var(--primary-color);
-    box-shadow: 0 0 0 3px #ff000031;
-}
-
-.create-room-btn, .join-room-btn {
-    width: 100%;
-}
-
-/* --- Room Code Display on Player Page --- */
-.room-code-display {
-    background-color: rgba(98, 98, 98, 0.1);
-    color: var(--text-color);
-    padding: 0.4rem 0.8rem;
-    border-radius: 8px;
-    font-size: 0.9rem;
-    font-weight: 500;
-    margin-top: 0px;
-    border: 1px solid var(--surface-border-color);
-}
-
-.room-code-display span {
-    font-weight: 700;
-    color: var(--accent-color);
-    letter-spacing: 1px;
-}
-
-/* --- New styles for Room Header Controls --- */
-
-.room-header-controls {
-    display: flex; /* This is the most important part! It aligns children in a row. */
-    justify-content: center; /* Centers the group in the middle of the page */
-    align-items: center; /* Vertically aligns the text and the button */
-    gap: 0.75rem; /* Adds a small space between the code and the button */
-    margin-top: 0.5rem;
-}
-
-.create-new-room-button {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%; /* Makes it circular */
-    background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
-    color: white;
-    font-size: 22px;
-    font-weight: bold;
-    text-decoration: none;
-    line-height: 28px; /* Helps vertically align the '+' */
-    box-shadow: 0 2px 8px var(--shadow-light-color);
-    transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
-}
-
-.create-new-room-button:hover {
-    transform: scale(1.1);
-    filter: brightness(1.15);
-    box-shadow: 0 4px 12px var(--shadow-color);
-}
-
-.create-new-room-button:active {
-    transform: scale(1);
-    filter: brightness(1);
-}
+    function updateMemberCount(count) {
+        const memberCountElement = document.querySelector('.member-count');
+        if (memberCountElement) {
+            memberCountElement.innerHTML = `<i class="fa-solid fa-user-group"></i> ${count}`;
+            console.log(`Member count updated: ${count}`);
+        }
+    }
+});
