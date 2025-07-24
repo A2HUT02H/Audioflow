@@ -282,8 +282,8 @@ def on_disconnect():
                 if room_id in rooms_data and 'members' in rooms_data[room_id]:
                     rooms_data[room_id]['members'] -= 1
 
-                    if rooms[room_id]['members'] < 0:
-                        rooms[room_id]['members'] = 0
+                    if rooms_data[room_id]['members'] < 0:
+                        rooms_data[room_id]['members'] = 0
                     
                     new_count = rooms_data[room_id]['members']
 
