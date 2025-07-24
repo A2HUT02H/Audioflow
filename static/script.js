@@ -131,75 +131,36 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('Visualizer not running: analyser or dataArray missing');
             return;
         }
-        
+
         analyser.getByteFrequencyData(dataArray);
-        
-        // Calculate overall audio loudness (RMS of all frequencies)
-        const squaredSum = dataArray.reduce((sum, value) => sum + (value * value), 0);
-        const rms = Math.sqrt(squaredSum / dataArray.length);
-        
-        // Normalize to 0-1 range
-        const normalized = rms / 255;
-        
-        // Apply exponential curve for better small-signal response
-        const exponential = Math.pow(normalized, 0.6); // Lower exponent = more sensitive
-        
-        // Amplify small signals
-        const loudness = Math.min(1, exponential * 2.5); // 2.5x amplification
-        
-        // Map audio levels: 50% audio = 0% bar, 100% audio = 100% bar
-        let barLevel = 0;
-        if (loudness > 0.5) {
-            // Audio is above 50%, map 50-100% audio to 0-100% bar height
-            barLevel = (loudness - 0.5) / 0.5; // Maps 0.5-1.0 to 0.0-1.0
-        }
-        // If loudness <= 0.5, barLevel stays 0 (no animation)
-        
-        // Debug log every 60 frames (about once per second at 60fps)
-        if (Math.random() < 0.016) { // ~1/60 chance
-            console.log(`Audio loudness: ${(loudness * 100).toFixed(1)}%, bar level: ${(barLevel * 100).toFixed(1)}%`);
-        }
-        
-        // Define max heights for each bar (different sizes for visual variety)
-        const maxHeights = {
-            bass: 120,   // Tallest bar (closest to image)
-            mid: 80,     // Medium bar
-            treble: 50   // Shortest bar (farthest from image)
-        };
-        
-        // Define minimum heights (shown when no animation)
-        const minHeights = {
-            bass: 20,    // Minimum height for bass bar
-            mid: 15,     // Minimum height for mid bar
-            treble: 10   // Minimum height for treble bar
-        };
-        
-        // Calculate heights: minimum + (barLevel * range)
-        const bassHeight = minHeights.bass + (barLevel * (maxHeights.bass - minHeights.bass));
-        const midHeight = minHeights.mid + (barLevel * (maxHeights.mid - minHeights.mid));
-        const trebleHeight = minHeights.treble + (barLevel * (maxHeights.treble - minHeights.treble));
-        
-        // Update left bars (reverse order: bass closest to image)
+
         const leftBars = coverDancingBarsLeft.querySelectorAll('.bar');
-        if (leftBars.length >= 3) {
-            leftBars[2].style.height = `${bassHeight}px`;    // Bass (closest)
-            leftBars[1].style.height = `${midHeight}px`;     // Mid
-            leftBars[0].style.height = `${trebleHeight}px`;  // Treble (farthest)
-        }
-        
-        // Update right bars (normal order: bass closest to image)
         const rightBars = coverDancingBarsRight.querySelectorAll('.bar');
-        if (rightBars.length >= 3) {
-            rightBars[0].style.height = `${bassHeight}px`;    // Bass (closest)
-            rightBars[1].style.height = `${midHeight}px`;     // Mid
-            rightBars[2].style.height = `${trebleHeight}px`;  // Treble (farthest)
+
+        const bin1 = dataArray[5];   // Low freq (bass)
+        const bin2 = dataArray[15];  // Mid freq
+        const bin3 = dataArray[25];  // High freq (treble)
+
+        const normalize = (value, max = 255, silenceThreshold = 10, maxHeight = 180) => {
+            if (value < silenceThreshold) return '0px';  // Fully collapse if quiet
+            return `${(value / max) * maxHeight}px`;     // Scale height normally
+        };
+
+        if (leftBars.length >= 3) {
+            leftBars[0].style.height = normalize(bin3); // Treble
+            leftBars[1].style.height = normalize(bin2); // Mid
+            leftBars[2].style.height = normalize(bin1); // Bass
         }
-        
-        // Continue animation while playing
+
+        if (rightBars.length >= 3) {
+            rightBars[0].style.height = normalize(bin1); // Bass
+            rightBars[1].style.height = normalize(bin2); // Mid
+            rightBars[2].style.height = normalize(bin3); // Treble
+        }
+
         if (!player.paused) {
             animationId = requestAnimationFrame(updateVisualizerBars);
         } else {
-            console.log('Visualizer stopped: player is paused');
             animationId = null;
             if (visualizerInterval) {
                 clearInterval(visualizerInterval);
@@ -340,21 +301,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
     player.addEventListener('seeked', () => {
         if (isReceivingUpdate) return;
-        
-        // Ensure audio visualizer connection is maintained after seek
+
         ensureAudioConnection();
-        
-        // Restart visualizer if audio is playing
-        if (!player.paused && !animationId) {
-            updateVisualizerBars();
+
+        // Use the dedicated function to correctly start the animation loop
+        if (!player.paused) {
+            startVisualizer();
         }
-        
+
         socket.emit('seek', { room: roomId, time: player.currentTime });
+
         userHasJustSeeked = true;
         clearTimeout(seekDebounceTimer);
         seekDebounceTimer = setTimeout(() => {
             userHasJustSeeked = false;
-        }, 2000);
+        }, 500);
+    });
+
+    player.addEventListener('timeupdate', () => {
+        // If visualizer is off but audio is playing, restart it
+        if (!animationId && !player.paused && !userHasJustSeeked) {
+            console.log('[Fallback] Restarting visualizer on timeupdate');
+            // Use startVisualizer to correctly begin the animation loop, not just a single frame.
+            startVisualizer();
+        }
     });
 
     // Initialize audio context on first user interaction
