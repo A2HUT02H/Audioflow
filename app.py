@@ -241,9 +241,11 @@ def player_room(room_id):
 
 @socketio.on('join')
 def on_join(data):
+    print(f"--- JOIN EVENT: Client {request.sid} is attempting to join room {data.get('room')} ---")
     room = data['room']
     if room in rooms:
         join_room(room)
+        print(f"--- JOIN SUCCESS: Client {request.sid} successfully joined room {room} ---")
         print(f"Client {request.sid} joined room: {room}")
         with thread_lock:
             # Update member count
@@ -262,6 +264,7 @@ def on_join(data):
             socketio.emit('member_count_update', {
                 'count': member_count}, to=room)
     else:
+        print(f"--- JOIN FAILED: Room {room} does not exist. ---")
         emit('error', {'message': 'Room not found.'})
 
 @socketio.on('disconnect')
@@ -270,6 +273,7 @@ def on_disconnect():
     print(f"Client disconnected: {request.sid}")
     for room_id in rooms(sid=request.sid):
         if room_id != request.sid:
+            print(f"--- DISCONNECT: Client was in room {room_id}. Processing member count... ---")
             with thread_lock:
                 if room_id in rooms and 'members' in rooms[room_id]:
                     rooms[room_id]['members'] -= 1
