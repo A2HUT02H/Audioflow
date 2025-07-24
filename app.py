@@ -27,7 +27,13 @@ app = Flask(__name__, static_url_path='/static')
 app.config['SECRET_KEY'] = 'secret!'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 redis_url = os.environ.get('REDIS_URL')
-socketio = SocketIO(app, async_mode='eventlet', message_queue=redis_url)
+socketio = SocketIO(
+    app,
+    async_mode='eventlet',
+    message_queue=redis_url,
+    ping_timeout=10,      # The server will wait 10 seconds for a response
+    ping_interval=5       # The server will send a ping every 5 seconds
+)
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 rooms = {}
