@@ -26,7 +26,8 @@ ALLOWED_EXTENSIONS = {'mp3', 'wav', 'ogg', 'flac', 'm4a'}
 app = Flask(__name__, static_url_path='/static')
 app.config['SECRET_KEY'] = 'secret!'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-socketio = SocketIO(app)
+redis_url = os.environ.get('REDIS_URL')
+socketio = SocketIO(app, async_mode='eventlet', message_queue=redis_url)
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 rooms = {}
@@ -209,7 +210,8 @@ def create_room():
         'current_cover': None,
         'is_playing': False,
         'last_progress_s': 0,
-        'last_updated_at': time.time()
+        'last_updated_at': time.time(),
+        'members': 0  # Initialize member count
     }
     print(f"New room created: {room_id}")
     return redirect(url_for('player_room', room_id=room_id))
@@ -218,8 +220,13 @@ def create_room():
 def player_room(room_id):
     """Serve the main player interface for a specific room."""
     if room_id not in rooms:
-        return redirect(url_for('home')) 
-    return render_template('index.html', room_id=room_id)
+        return redirect(url_for('home'))
+    # Calculate member count, default to 1 if not tracked
+    member_count = 1
+    room_state = rooms.get(room_id, {})
+    if 'members' in room_state and isinstance(room_state['members'], int):
+        member_count = max(room_state['members'], 1)
+    return render_template('index.html', room_id=room_id, member_count=member_count)
 
 
 # =================================================================================
@@ -233,13 +240,49 @@ def on_join(data):
         join_room(room)
         print(f"Client {request.sid} joined room: {room}")
         with thread_lock:
+            # Update member count
+            if 'members' not in rooms[room]:
+                rooms[room]['members'] = 0
+            rooms[room]['members'] += 1
+            member_count = rooms[room]['members']
+
             room_state = rooms[room].copy()
             if room_state['is_playing']:
                 time_since_update = time.time() - room_state['last_updated_at']
                 room_state['last_progress_s'] += time_since_update
-            emit('room_state', room_state, room=request.sid)
+            emit('room_state', room_state)
+            
+            # Broadcast member count update to all clients in the room
+            socketio.emit('member_count_update', {
+                'count': member_count}, to=room)
     else:
-        emit('error', {'message': 'Room not found.'}, room=request.sid)
+        emit('error', {'message': 'Room not found.'})
+
+@socketio.on('disconnect')
+def on_disconnect():
+    """Handle client disconnection and update member count"""
+    print(f"Client disconnected: {request.sid}")
+    for room_id in rooms(sid=request.sid):
+        if room_id != request.sid:
+            with thread_lock:
+                if room_id in rooms and 'members' in rooms[room_id]:
+                    rooms[room_id]['members'] -= 1
+
+                    if rooms[room_id]['members'] < 0:
+                        rooms[room_id]['members'] = 0
+                    
+                    new_count = rooms[room_id]['members']
+
+                    leave_room(room_id)
+                    print(f"Client {request.sid} left room: {room_id}, new member count: {new_count}")
+                    # Emit updated member count to the room
+                    socketio.emit('member_count_update', {'count': new_count}, to=room_id)
+                    if new_count == 0:
+                         print(f"Room {room_id} is now empty, cleaning up")
+                         # Reset room state but keep the room for potential rejoins
+                         rooms[room_id]['is_playing'] = False
+                         rooms[room_id]['current_file'] = None
+                         rooms[room_id]['current_cover'] = None
 
 @socketio.on('client_ping')
 def handle_client_ping():
@@ -260,7 +303,7 @@ def handle_play(data):
         socketio.emit('scheduled_play', {
             'audio_time': data.get('time', 0),
             'target_timestamp': target_timestamp
-        }, room=room)
+        }, to=room)
 
 @socketio.on('pause')
 def handle_pause(data):
@@ -274,7 +317,7 @@ def handle_pause(data):
                 room_state['is_playing'] = False
                 room_state['last_progress_s'] = final_progress
                 room_state['last_updated_at'] = time.time()
-                socketio.emit('pause', {'time': final_progress}, room=room)
+                socketio.emit('pause', {'time': final_progress}, to=room)
 
 @socketio.on('seek')
 def handle_seek(data):
@@ -292,9 +335,9 @@ def handle_seek(data):
             socketio.emit('scheduled_play', {
                 'audio_time': new_time,
                 'target_timestamp': target_timestamp
-            }, room=room_id)
+            }, to=room_id)
         else:
-            socketio.emit('pause', {'time': new_time}, room=room_id)
+            socketio.emit('pause', {'time': new_time}, to=room_id)
 
 @socketio.on('sync')
 def handle_sync(data):
@@ -304,7 +347,7 @@ def handle_sync(data):
         socketio.emit('scheduled_play', {
             'audio_time': data.get('time', 0),
             'target_timestamp': target_timestamp
-        }, room=room)
+        }, to=room)
 
 
 # =================================================================================
