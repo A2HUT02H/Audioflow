@@ -99,23 +99,44 @@ body {
     transition: opacity 0.4s ease, transform 0.4s ease, box-shadow 0.5s ease;
 }
 
-/* FIX: Container is now a stable flexbox parent */
+/* --- MODIFIED: Filename Container Styling --- */
 #file-name {
     font-size: 1rem;
     font-weight: 500;
     color: var(--text-muted-color);
-    padding: 0.5rem 1rem;
-    background-color: rgba(28, 28, 28, 0.2);
-    border-radius: 12px;
+    padding: 0.5rem 0;
     min-height: 2.5em;
     display: flex;
     align-items: center;
-    justify-content: center; /* Center by default */
+    justify-content: center;
+    flex-direction: column;
     line-height: 1.4;
-    transition: color 0.3s ease, border-color 0.3s ease;
-    border: 2px solid transparent;
-    overflow: hidden;
-    position: relative; /* For proper mask positioning */
+    transition: color 0.3s ease;
+    overflow: visible;
+    position: relative;
+}
+
+/* --- NEW: Top and Bottom Line Styling --- */
+#file-name::before,
+#file-name::after {
+    content: "";
+    display: block;
+    width: 100%;
+    background: var(--current-border-color, linear-gradient(90deg, var(--primary-color), var(--secondary-color)));
+    border-radius: 2px;
+    opacity: 0; /* --- MODIFIED: Hidden by default --- */
+    transition: opacity 0.4s ease, background 0.5s ease; /* Smooth fade-in/out */
+}
+
+/* --- NEW: Define line thicknesses --- */
+#file-name::before {
+    height: 3px; /* Thinner top line */
+    margin-bottom: 0.5em;
+}
+
+#file-name::after {
+    height: 3px; /* --- MODIFIED: Thicker bottom line --- */
+    margin-top: 0.5em;
 }
 
 /* When text is overflowing and needs to slide, align to start */
@@ -136,30 +157,37 @@ body {
     white-space: nowrap;
     text-overflow: clip; 
     overflow: visible;
-    flex-shrink: 0; /* Don't shrink the text, let it slide instead */
+    flex-shrink: 0;
     min-width: 0;
 }
 
 #file-name.is-overflowing {
-    justify-content: flex-start; /* Left align for sliding animation */
-    /* Use a wider fade to look smoother */
+    justify-content: flex-start;
     -webkit-mask-image: linear-gradient(to right, transparent, black 8%, black 92%, transparent);
     mask-image: linear-gradient(to right, transparent, black 8%, black 92%, transparent);
 }
 
 
+/* --- MODIFIED: Main logic for playing state --- */
 #file-name.playing {
-    border-color: var(--cover-art-color, var(--accent-color));
+    /* --- NEW: Add faded edge mask ONLY when playing --- */
+    -webkit-mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
+    mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
+}
+
+/* --- NEW: Make lines visible and start glowing when playing --- */
+#file-name.playing::before,
+#file-name.playing::after {
+    opacity: 0.8; /* Make lines visible */
     animation: playing-pulse 2s ease-in-out infinite;
 }
 
-
 @keyframes playing-pulse {
     0%, 100% { 
-        box-shadow: 0 0 5px currentColor;
+        box-shadow: 0 0 5px var(--current-border-color, var(--accent-color));
     }
     50% { 
-        box-shadow: 0 0 15px currentColor;
+        box-shadow: 0 0 15px var(--current-border-color, var(--accent-color));
     }
 }
 
@@ -195,7 +223,7 @@ audio#player {
     font-size: 1rem;
     font-weight: 600;
     cursor: pointer;
-    transition: transform 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease, background 0.5s ease, color 0.5s ease; /* Added 'color' transition */
+    transition: transform 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease, background 0.5s ease, color 0.5s ease;
     box-shadow: 0 4px 15px var(--shadow-light-color);
 }
 
@@ -270,43 +298,19 @@ label[for="delay-input"] {
     border-radius: 2px;
     box-shadow: 0 0 8px var(--current-border-color, var(--accent-color));
     align-self: center; /* Vertically center each bar within the flex container */
-    transition: height 0.05s ease-out; /* Much faster transitions for better responsiveness */
+    transition: height 0.1s ease-out; /* Much faster transitions for better responsiveness */
 }
 
-/* Default heights for visualizer bars - minimum heights when audio is below 50% */
-.cover-dancing-bars.left .bar:nth-child(1) { 
-    height: 10px; /* Treble - minimum height */
-}
-.cover-dancing-bars.left .bar:nth-child(2) { 
-    height: 15px; /* Mid - minimum height */
-}
-.cover-dancing-bars.left .bar:nth-child(3) { 
-    height: 20px; /* Bass - minimum height */
-}
 
-.cover-dancing-bars.right .bar:nth-child(1) { 
-    height: 20px; /* Bass - minimum height */
+/* Bars are invisible (height: 0px) when audio is quiet or mute */
+.cover-dancing-bars.left .bar:nth-child(1),
+.cover-dancing-bars.left .bar:nth-child(2),
+.cover-dancing-bars.left .bar:nth-child(3),
+.cover-dancing-bars.right .bar:nth-child(1),
+.cover-dancing-bars.right .bar:nth-child(2),
+.cover-dancing-bars.right .bar:nth-child(3) {
+    height: 0px; /* Invisible when quiet/mute */
 }
-.cover-dancing-bars.right .bar:nth-child(2) { 
-    height: 15px; /* Mid - minimum height */
-}
-.cover-dancing-bars.right .bar:nth-child(3) { 
-    height: 10px; /* Treble - minimum height */
-}
-
-/* Remove the old static animation - now using dynamic visualizer */
-/*
-@keyframes cover-dance {
-    0%, 100% { 
-        transform: scaleY(0.3);
-        opacity: 0.6;
-    }
-    50% { 
-        transform: scaleY(1.0);
-        opacity: 1;
-    }
-}
-*/
 
 #file-name.playing #file-name-text {
     color: var(--text-color);
