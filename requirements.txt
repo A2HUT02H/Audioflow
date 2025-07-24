@@ -1,7 +1,8 @@
 Flask
-Flask-SocketIO
+Flask-SocketIO[redis]
 python-socketio
 mutagen
 gunicorn
 eventlet
 uuid
+redis
