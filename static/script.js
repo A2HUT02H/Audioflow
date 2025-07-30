@@ -620,8 +620,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize the custom player with a slight delay to ensure DOM is fully ready
     setTimeout(() => {
         console.log('[DEBUG] Attempting to initialize custom player...');
+        console.log('[DEBUG] Current page URL:', window.location.href);
+        console.log('[DEBUG] Current page title:', document.title);
+        console.log('[DEBUG] Body dataset roomId:', document.body.dataset.roomId);
         console.log('[DEBUG] Custom player container exists:', !!document.querySelector('.custom-player'));
-        console.log('[DEBUG] DOM element availability check:', {
+        console.log('[DEBUG] Audio player element exists:', !!document.getElementById('player'));
+        console.log('[DEBUG] File name display exists:', !!document.getElementById('file-name'));
+        console.log('[DEBUG] Upload button exists:', !!document.getElementById('upload-btn'));
+        console.log('[DEBUG] All custom player elements in DOM:', {
+            customPlayerContainer: !!document.querySelector('.custom-player'),
             playPauseBtn: !!document.getElementById('play-pause-btn'),
             playPauseIcon: !!document.getElementById('play-pause-icon'),
             volumeBtn: !!document.getElementById('volume-btn'),
@@ -636,6 +643,20 @@ document.addEventListener('DOMContentLoaded', () => {
             currentTimeDisplay: !!document.getElementById('current-time'),
             totalTimeDisplay: !!document.getElementById('total-time')
         });
+        
+        // Check if we're on the right page
+        if (!document.body.dataset.roomId) {
+            console.error('[ERROR] No room ID found in body dataset - you might be on the wrong page!');
+            console.log('[DEBUG] Make sure you are accessing /room/[room_id] and not just the home page');
+            return;
+        }
+        
+        if (!document.querySelector('.custom-player')) {
+            console.error('[ERROR] Custom player container not found - the page template might not be loading correctly');
+            console.log('[DEBUG] Expected elements for custom player are missing from the DOM');
+            return;
+        }
+        
         initCustomPlayer();
     }, 100);
 
