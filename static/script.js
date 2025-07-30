@@ -532,32 +532,51 @@ document.addEventListener('DOMContentLoaded', () => {
     // =================================================================================
 
     if (uploadBtn && audioInput) {
-        uploadBtn.addEventListener('click', () => audioInput.click());
+        console.log('[DEBUG] Upload button and audio input found, setting up event listeners');
+        uploadBtn.addEventListener('click', () => {
+            console.log('[DEBUG] Upload button clicked');
+            audioInput.click();
+        });
 
         audioInput.addEventListener('change', () => {
+            console.log('[DEBUG] File input changed');
             const file = audioInput.files[0];
-            if (!file) return;
+            if (!file) {
+                console.log('[DEBUG] No file selected');
+                return;
+            }
 
+            console.log('[DEBUG] File selected:', file.name, 'Size:', file.size, 'Type:', file.type);
             fileNameText.textContent = `Uploading: ${file.name}`;
             const formData = new FormData();
             formData.append('audio', file);
             formData.append('room', roomId);
 
+            console.log('[DEBUG] Starting upload request to /upload');
             fetch('/upload', { method: 'POST', body: formData })
-                .then(response => response.json())
+                .then(response => {
+                    console.log('[DEBUG] Upload response status:', response.status);
+                    return response.json();
+                })
                 .then(data => {
+                    console.log('[DEBUG] Upload response data:', data);
                     if (data.success) {
                         console.log('Upload successful. Waiting for new_file event.');
                     } else {
+                        console.error('Upload failed:', data.error);
                         alert(data.error || 'Upload failed.');
                         fileNameText.textContent = 'Upload failed.';
                     }
                 }).catch(error => {
-                    alert('An unexpected error occurred during upload.');
                     console.error('Upload fetch error:', error);
+                    alert('An unexpected error occurred during upload.');
                     fileNameText.textContent = 'Upload error.';
                 });
         });
+    } else {
+        console.error('[ERROR] Upload button or audio input not found!');
+        console.log('[DEBUG] uploadBtn:', uploadBtn);
+        console.log('[DEBUG] audioInput:', audioInput);
     }
 
     if (syncBtn) {
