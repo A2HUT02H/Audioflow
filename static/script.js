@@ -1173,35 +1173,68 @@ document.addEventListener('DOMContentLoaded', () => {
         const fileNameText = document.querySelector('#file-name-text');
         
         if (mainHeading) {
-            // For the heading, use the opposite shade based on background brightness
-            // The background at the top is the light shade, so we need to consider its brightness
-            const topBrightness = getBrightness(shades.light.r, shades.light.g, shades.light.b);
-            let headingColor;
-            
-            if (topBrightness > 128) {
-                // Light background at top - use dark color for heading
-                headingColor = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
+            // Check if heading has a fixed color from dancing bars
+            const fixedColor = mainHeading.getAttribute('data-fixed-color');
+            if (fixedColor) {
+                // Use the stored fixed color instead of calculating new one
+                mainHeading.style.removeProperty('background');
+                mainHeading.style.removeProperty('background-image');
+                mainHeading.style.removeProperty('-webkit-background-clip');
+                mainHeading.style.removeProperty('-webkit-text-fill-color');
+                mainHeading.style.removeProperty('background-clip');
+                mainHeading.style.color = fixedColor;
+                mainHeading.style.setProperty('color', fixedColor, 'important');
+                console.log(`Using fixed heading color: ${fixedColor}`);
             } else {
-                // Dark background at top - use light color for heading
-                headingColor = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
+                // For the heading, use the opposite shade based on background brightness
+                // The background at the top is the light shade, so we need to consider its brightness
+                const topBrightness = getBrightness(shades.light.r, shades.light.g, shades.light.b);
+                let headingColor;
+                
+                if (topBrightness > 128) {
+                    // Light background at top - use dark color for heading
+                    headingColor = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
+                } else {
+                    // Dark background at top - use light color for heading
+                    headingColor = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
+                }
+                
+                // Force clear any existing styles and apply new color
+                mainHeading.style.removeProperty('background');
+                mainHeading.style.removeProperty('background-image');
+                mainHeading.style.removeProperty('-webkit-background-clip');
+                mainHeading.style.removeProperty('-webkit-text-fill-color');
+                mainHeading.style.removeProperty('background-clip');
+                mainHeading.style.color = headingColor;
+                mainHeading.style.setProperty('color', headingColor, 'important');
+                
+                console.log(`Heading color set to: ${headingColor} (top brightness: ${topBrightness})`);
             }
-            
-            // Force clear any existing styles and apply new color
-            mainHeading.style.removeProperty('background');
-            mainHeading.style.removeProperty('background-image');
-            mainHeading.style.removeProperty('-webkit-background-clip');
-            mainHeading.style.removeProperty('-webkit-text-fill-color');
-            mainHeading.style.removeProperty('background-clip');
-            mainHeading.style.color = headingColor;
-            mainHeading.style.setProperty('color', headingColor, 'important');
-            
-            console.log(`Heading color set to: ${headingColor} (top brightness: ${topBrightness})`);
         }
         
         if (memberCount) memberCount.style.color = textColor;
         if (roomCodeDisplay) {
-            roomCodeDisplay.style.color = textColor;
-            roomCodeDisplay.style.borderColor = textColor;
+            // Check if room code has a fixed color from dancing bars
+            const fixedColor = roomCodeDisplay.getAttribute('data-fixed-color');
+            if (fixedColor) {
+                // Use the stored fixed color instead of calculating new one
+                roomCodeDisplay.style.color = fixedColor;
+                roomCodeDisplay.style.setProperty('color', fixedColor, 'important');
+                roomCodeDisplay.style.borderColor = fixedColor;
+                console.log(`Using fixed room code color: ${fixedColor}`);
+                
+                // Also apply to the span inside room code display
+                const roomCodeSpan = roomCodeDisplay.querySelector('span');
+                if (roomCodeSpan) {
+                    const spanFixedColor = roomCodeSpan.getAttribute('data-fixed-color');
+                    if (spanFixedColor) {
+                        roomCodeSpan.style.setProperty('color', spanFixedColor, 'important');
+                    }
+                }
+            } else {
+                roomCodeDisplay.style.color = textColor;
+                roomCodeDisplay.style.borderColor = textColor;
+            }
         }
         if (fileNameText) fileNameText.style.color = textColor;
         
@@ -1394,8 +1427,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 barColorForHeading = `rgb(${sr}, ${sg}, ${sb})`;
             }
             
-            // Set CSS variables for both dancing bars and heading
+            // Set CSS variables for both dancing bars and heading - KEEP THESE PERSISTENT
             document.documentElement.style.setProperty('--current-bar-color', barColorForHeading);
+            
+            // Store the bar color permanently for heading and room code
+            if (mainHeading) {
+                mainHeading.style.setProperty('color', barColorForHeading, 'important');
+                // Store as data attribute for persistence
+                mainHeading.setAttribute('data-fixed-color', barColorForHeading);
+            }
+            if (roomCodeDisplay) {
+                roomCodeDisplay.style.setProperty('color', barColorForHeading, 'important');
+                // Store as data attribute for persistence
+                roomCodeDisplay.setAttribute('data-fixed-color', barColorForHeading);
+                
+                // Also apply to the span inside room code display
+                const roomCodeSpan = roomCodeDisplay.querySelector('span');
+                if (roomCodeSpan) {
+                    roomCodeSpan.style.setProperty('color', barColorForHeading, 'important');
+                    roomCodeSpan.setAttribute('data-fixed-color', barColorForHeading);
+                }
+            }
             
             document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => {
                 bar.style.background = barColor;
@@ -1404,7 +1456,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             fileNameDisplay.style.borderColor = '';
             document.documentElement.style.removeProperty('--current-border-color');
-            document.documentElement.style.removeProperty('--current-bar-color');
+            // DON'T remove --current-bar-color to keep heading color persistent
             
             document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => {
                 bar.style.background = '';
@@ -1429,18 +1481,32 @@ document.addEventListener('DOMContentLoaded', () => {
         const fileNameText = document.querySelector('#file-name-text');
         
         if (mainHeading) {
-            mainHeading.style.removeProperty('background');
-            mainHeading.style.removeProperty('background-image');
-            mainHeading.style.removeProperty('-webkit-background-clip');
-            mainHeading.style.removeProperty('-webkit-text-fill-color');
-            mainHeading.style.removeProperty('background-clip');
-            mainHeading.style.removeProperty('color');
+            // Only reset if no fixed color is stored
+            const fixedColor = mainHeading.getAttribute('data-fixed-color');
+            if (!fixedColor) {
+                mainHeading.style.removeProperty('background');
+                mainHeading.style.removeProperty('background-image');
+                mainHeading.style.removeProperty('-webkit-background-clip');
+                mainHeading.style.removeProperty('-webkit-text-fill-color');
+                mainHeading.style.removeProperty('background-clip');
+                mainHeading.style.removeProperty('color');
+            }
         }
         
         if (memberCount) memberCount.style.color = '';
         if (roomCodeDisplay) {
-            roomCodeDisplay.style.color = '';
-            roomCodeDisplay.style.borderColor = '';
+            // Only reset if no fixed color is stored
+            const fixedColor = roomCodeDisplay.getAttribute('data-fixed-color');
+            if (!fixedColor) {
+                roomCodeDisplay.style.color = '';
+                roomCodeDisplay.style.borderColor = '';
+                
+                // Also reset span if no fixed color
+                const roomCodeSpan = roomCodeDisplay.querySelector('span');
+                if (roomCodeSpan && !roomCodeSpan.getAttribute('data-fixed-color')) {
+                    roomCodeSpan.style.removeProperty('color');
+                }
+            }
         }
         if (fileNameText) fileNameText.style.color = '';
         
