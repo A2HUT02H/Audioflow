@@ -784,6 +784,7 @@ audio#player {
     color: var(--current-border-color, var(--accent-color));
     letter-spacing: 1px;
     transition: color 0.5s ease; /* Smooth transition for theme changes */
+    /* This will be overridden by JavaScript with !important when dancing bars set a fixed color */
 }
 
 /* --- Member Count Styling --- */
