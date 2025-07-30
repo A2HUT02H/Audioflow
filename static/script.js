@@ -463,25 +463,81 @@ document.addEventListener('DOMContentLoaded', () => {
     function initCustomPlayer() {
         console.log('[DEBUG] Initializing custom player');
         
-        // Check if required elements exist
-        if (!volumeFillVertical || !volumeHandleVertical || !volumeIcon) {
-            console.error('[ERROR] Volume control elements not found:', {
-                volumeFillVertical: !!volumeFillVertical,
-                volumeHandleVertical: !!volumeHandleVertical,
-                volumeIcon: !!volumeIcon
-            });
-            return;
+        // Check if required elements exist with detailed logging
+        const requiredElements = {
+            volumeFillVertical: volumeFillVertical,
+            volumeHandleVertical: volumeHandleVertical,
+            volumeIcon: volumeIcon,
+            playPauseBtn: playPauseBtn,
+            playPauseIcon: playPauseIcon,
+            progressBar: progressBar,
+            progressFill: progressFill,
+            progressHandle: progressHandle,
+            currentTimeDisplay: currentTimeDisplay,
+            totalTimeDisplay: totalTimeDisplay,
+            volumeBtn: volumeBtn,
+            volumePopup: volumePopup,
+            volumeSliderVertical: volumeSliderVertical
+        };
+        
+        const missingElements = [];
+        for (const [name, element] of Object.entries(requiredElements)) {
+            if (!element) {
+                missingElements.push(name);
+            }
         }
         
-        if (!playPauseBtn || !playPauseIcon || !progressBar || !progressFill || !progressHandle) {
-            console.error('[ERROR] Player control elements not found:', {
-                playPauseBtn: !!playPauseBtn,
-                playPauseIcon: !!playPauseIcon,
-                progressBar: !!progressBar,
-                progressFill: !!progressFill,
-                progressHandle: !!progressHandle
+        if (missingElements.length > 0) {
+            console.error('[ERROR] Missing custom player elements:', missingElements);
+            console.log('[DEBUG] Attempting to re-query missing elements...');
+            
+            // Try to re-query missing elements
+            const requeried = {};
+            missingElements.forEach(name => {
+                let selector;
+                switch(name) {
+                    case 'volumeFillVertical': selector = '#volume-fill-vertical'; break;
+                    case 'volumeHandleVertical': selector = '#volume-handle-vertical'; break;
+                    case 'volumeIcon': selector = '#volume-icon'; break;
+                    case 'playPauseBtn': selector = '#play-pause-btn'; break;
+                    case 'playPauseIcon': selector = '#play-pause-icon'; break;
+                    case 'progressBar': selector = '.progress-bar'; break;
+                    case 'progressFill': selector = '#progress-fill'; break;
+                    case 'progressHandle': selector = '#progress-handle'; break;
+                    case 'currentTimeDisplay': selector = '#current-time'; break;
+                    case 'totalTimeDisplay': selector = '#total-time'; break;
+                    case 'volumeBtn': selector = '#volume-btn'; break;
+                    case 'volumePopup': selector = '#volume-popup'; break;
+                    case 'volumeSliderVertical': selector = '.volume-slider-vertical'; break;
+                }
+                requeried[name] = document.querySelector(selector);
+                console.log(`[DEBUG] Re-queried ${name} (${selector}):`, !!requeried[name]);
             });
-            return;
+            
+            // If still missing critical elements, show warning but continue with partial functionality
+            if (!requeried.playPauseBtn && !playPauseBtn) {
+                console.error('[CRITICAL] Play/pause button not found - custom player cannot initialize');
+                return;
+            }
+        }
+        
+        console.log('[DEBUG] Custom player elements validated, proceeding with initialization');
+        
+        // Ensure custom player is visible and default player is hidden
+        const customPlayerElement = document.querySelector('.custom-player');
+        if (customPlayerElement) {
+            customPlayerElement.style.display = 'block';
+            customPlayerElement.style.visibility = 'visible';
+            console.log('[DEBUG] Custom player visibility ensured');
+        } else {
+            console.error('[ERROR] Custom player container (.custom-player) not found!');
+        }
+        
+        // Ensure default player is hidden
+        if (player) {
+            player.style.display = 'none';
+            player.controls = false;
+            console.log('[DEBUG] Default player hidden and controls disabled');
         }
         
         // Set initial volume
@@ -557,11 +613,14 @@ document.addEventListener('DOMContentLoaded', () => {
         player.addEventListener('volumechange', () => {
             updateVolumeDisplay();
         });
+        
+        console.log('[SUCCESS] Custom player initialization completed successfully!');
     }
 
     // Initialize the custom player with a slight delay to ensure DOM is fully ready
     setTimeout(() => {
         console.log('[DEBUG] Attempting to initialize custom player...');
+        console.log('[DEBUG] Custom player container exists:', !!document.querySelector('.custom-player'));
         console.log('[DEBUG] DOM element availability check:', {
             playPauseBtn: !!document.getElementById('play-pause-btn'),
             playPauseIcon: !!document.getElementById('play-pause-icon'),
