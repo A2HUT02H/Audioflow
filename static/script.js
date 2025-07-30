@@ -654,6 +654,59 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!document.querySelector('.custom-player')) {
             console.error('[ERROR] Custom player container not found - the page template might not be loading correctly');
             console.log('[DEBUG] Expected elements for custom player are missing from the DOM');
+            console.log('[DEBUG] Attempting to create custom player HTML dynamically...');
+            
+            // Create the custom player HTML dynamically
+            const customPlayerHTML = `
+                <div class="custom-player">
+                    <!-- Time display row -->
+                    <div class="player-time-display">
+                        <span id="current-time">0:00</span>
+                        <span id="total-time">0:00</span>
+                    </div>
+                    
+                    <!-- Main playback controls row -->
+                    <div class="main-player-row">
+                        <button class="control-button player-btn" id="play-pause-btn">
+                            <i class="fas fa-play" id="play-pause-icon"></i>
+                        </button>
+                        
+                        <div class="progress-bar-container">
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="progress-fill"></div>
+                                <div class="progress-handle" id="progress-handle"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="volume-control">
+                            <button class="control-button volume-btn" id="volume-btn">
+                                <i class="fas fa-volume-up" id="volume-icon"></i>
+                            </button>
+                            <div class="volume-popup" id="volume-popup">
+                                <div class="volume-slider-vertical">
+                                    <div class="volume-fill-vertical" id="volume-fill-vertical"></div>
+                                    <div class="volume-handle-vertical" id="volume-handle-vertical"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Find a suitable place to insert the custom player (after the audio element)
+            const audioElement = document.getElementById('player');
+            if (audioElement) {
+                audioElement.insertAdjacentHTML('afterend', customPlayerHTML);
+                console.log('[DEBUG] Custom player HTML created dynamically');
+                
+                // Wait a moment for DOM to update, then try to initialize
+                setTimeout(() => {
+                    console.log('[DEBUG] Retrying initialization after dynamic creation...');
+                    initCustomPlayer();
+                }, 200);
+            } else {
+                console.error('[ERROR] Cannot create custom player - audio element not found');
+            }
             return;
         }
         
