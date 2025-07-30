@@ -261,6 +261,12 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateProgressBar() {
         if (isDraggingProgress) return;
         
+        // Add null checks for progress elements
+        if (!progressFill || !progressHandle || !currentTimeDisplay || !totalTimeDisplay) {
+            console.log('Progress bar elements not yet available');
+            return;
+        }
+        
         const progress = player.duration ? (player.currentTime / player.duration) * 100 : 0;
         progressFill.style.width = `${progress}%`;
         progressHandle.style.left = `${progress}%`;
@@ -271,6 +277,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateVolumeDisplay() {
         if (isDraggingVolume) return;
+        
+        // Add null checks for volume elements
+        if (!volumeFillVertical || !volumeHandleVertical || !volumeIcon) {
+            console.log('Volume elements not yet available');
+            return;
+        }
         
         const volumePercent = player.volume * 100;
         volumeFillVertical.style.height = `${volumePercent}%`;
@@ -287,11 +299,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function showVolumePopup() {
+        if (!volumePopup) {
+            console.log('Volume popup element not yet available');
+            return;
+        }
         volumePopup.style.display = 'block';
         setTimeout(() => volumePopup.classList.add('show'), 10);
     }
 
     function hideVolumePopup() {
+        if (!volumePopup) {
+            console.log('Volume popup element not yet available');
+            return;
+        }
         volumePopup.classList.remove('show');
         setTimeout(() => volumePopup.style.display = 'none', 300);
     }
@@ -315,6 +335,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updatePlayPauseButton() {
+        if (!playPauseIcon) {
+            console.log('Play/pause icon element not yet available');
+            return;
+        }
+        
         if (player.paused) {
             playPauseIcon.className = 'fas fa-play';
         } else {
@@ -436,6 +461,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initialize custom player
     function initCustomPlayer() {
+        console.log('[DEBUG] Initializing custom player');
+        
+        // Check if required elements exist
+        if (!volumeFillVertical || !volumeHandleVertical || !volumeIcon) {
+            console.error('[ERROR] Volume control elements not found:', {
+                volumeFillVertical: !!volumeFillVertical,
+                volumeHandleVertical: !!volumeHandleVertical,
+                volumeIcon: !!volumeIcon
+            });
+            return;
+        }
+        
+        if (!playPauseBtn || !playPauseIcon || !progressBar || !progressFill || !progressHandle) {
+            console.error('[ERROR] Player control elements not found:', {
+                playPauseBtn: !!playPauseBtn,
+                playPauseIcon: !!playPauseIcon,
+                progressBar: !!progressBar,
+                progressFill: !!progressFill,
+                progressHandle: !!progressHandle
+            });
+            return;
+        }
+        
         // Set initial volume
         player.volume = lastVolume;
         updateVolumeDisplay();
@@ -511,8 +559,26 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Initialize the custom player
-    initCustomPlayer();
+    // Initialize the custom player with a slight delay to ensure DOM is fully ready
+    setTimeout(() => {
+        console.log('[DEBUG] Attempting to initialize custom player...');
+        console.log('[DEBUG] DOM element availability check:', {
+            playPauseBtn: !!document.getElementById('play-pause-btn'),
+            playPauseIcon: !!document.getElementById('play-pause-icon'),
+            volumeBtn: !!document.getElementById('volume-btn'),
+            volumeIcon: !!document.getElementById('volume-icon'),
+            volumePopup: !!document.getElementById('volume-popup'),
+            volumeSliderVertical: !!document.querySelector('.volume-slider-vertical'),
+            volumeFillVertical: !!document.getElementById('volume-fill-vertical'),
+            volumeHandleVertical: !!document.getElementById('volume-handle-vertical'),
+            progressBar: !!document.querySelector('.progress-bar'),
+            progressFill: !!document.getElementById('progress-fill'),
+            progressHandle: !!document.getElementById('progress-handle'),
+            currentTimeDisplay: !!document.getElementById('current-time'),
+            totalTimeDisplay: !!document.getElementById('total-time')
+        });
+        initCustomPlayer();
+    }, 100);
 
     // Close volume popup when clicking outside
     document.addEventListener('click', (e) => {
