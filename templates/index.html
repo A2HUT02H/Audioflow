@@ -52,39 +52,49 @@
             <script>
             // Add 'long' class if file name is too long and set animation distance
             function updateFileNameAnimation() {
-              var el = document.getElementById('file-name-text');
-              var container = document.getElementById('file-name');
-              if (!el || !container) return;
+                const el = document.getElementById('file-name-text');
+                const container = document.getElementById('file-name');
+                if (!el || !container) return;
 
-              // Use requestAnimationFrame to ensure layout is calculated after DOM updates
-              requestAnimationFrame(() => {
-                // Reset animation first to recalculate properly
-                el.classList.remove('long');
-                container.classList.remove('is-overflowing');
-                el.style.removeProperty('--slide-distance');
-                
-                // Force a reflow
-                void el.offsetWidth;
-                
-                // Calculate available width (container width minus padding only - no dancing bars)
-                const containerWidth = container.offsetWidth;
-                const containerPadding = parseInt(getComputedStyle(container).paddingLeft) + parseInt(getComputedStyle(container).paddingRight);
-                
-                const availableWidth = containerWidth - containerPadding;
-                const textWidth = el.scrollWidth;
-                const isOverflowing = textWidth > availableWidth;
+                const SCROLL_SPEED_PPS = 50; // Pixels per second (consistent speed)
+                const MIN_ANIMATION_DURATION = 6; // Minimum duration in seconds
+                const PAUSE_RATIO = 0.3; // 30% of time spent pausing (split between positions)
 
-                if (isOverflowing) {
-                  el.classList.add('long');
-                  container.classList.add('is-overflowing');
-                  // Calculate the distance needed to show the full text
-                  const distance = textWidth - availableWidth + 20; // Add 20px buffer
-                  el.style.setProperty('--slide-distance', '-' + distance + 'px');
-                  console.log(`Text sliding enabled: ${textWidth}px > ${availableWidth}px, distance: ${distance}px`);
-                } else {
-                  console.log(`Text fits: ${textWidth}px <= ${availableWidth}px`);
-                }
-              });
+                requestAnimationFrame(() => {
+                    // Reset properties to get accurate measurements
+                    el.classList.remove('long');
+                    container.classList.remove('is-overflowing');
+                    el.style.removeProperty('--slide-distance');
+                    el.style.removeProperty('--slide-duration');
+
+                    // Force a reflow to apply the reset
+                    void el.offsetWidth;
+
+                    const containerWidth = container.offsetWidth;
+                    const textWidth = el.scrollWidth;
+                    const isOverflowing = textWidth > containerWidth;
+
+                    if (isOverflowing) {
+                        el.classList.add('long');
+                        container.classList.add('is-overflowing');
+
+                        // Calculate the exact distance needed to show the full text
+                        // Move text so that the end of the text aligns with the end of the container
+                        const slideDistance = textWidth - containerWidth;
+                        el.style.setProperty('--slide-distance', `-${slideDistance}px`);
+
+                        // Calculate duration: movement time (both directions) + pause time
+                        // Since we're moving back and forth, we need time for both directions
+                        const onewayMoveDuration = slideDistance / SCROLL_SPEED_PPS;
+                        const totalMoveDuration = onewayMoveDuration * 2; // Back and forth
+                        const totalDuration = Math.max(totalMoveDuration / (1 - PAUSE_RATIO), MIN_ANIMATION_DURATION);
+                        el.style.setProperty('--slide-duration', `${totalDuration}s`);
+                        
+                        console.log(`Text sliding back-and-forth: ${slideDistance.toFixed(0)}px over ${totalDuration.toFixed(1)}s at ${SCROLL_SPEED_PPS}px/s`);
+                    } else {
+                        console.log(`Text fits: ${textWidth}px <= ${containerWidth}px`);
+                    }
+                });
             }
             window.addEventListener('DOMContentLoaded', updateFileNameAnimation);
             window.addEventListener('resize', updateFileNameAnimation);
@@ -92,9 +102,44 @@
             </script>
         </div>
 
-        <audio id="player" controls preload="auto">
+        <audio id="player" preload="auto" style="display: none;">
             Your browser does not support the audio element.
         </audio>
+
+        <!-- Custom Audio Player Controls -->
+        <div class="custom-player">
+            <!-- Time display row -->
+            <div class="player-time-display">
+                <span id="current-time">0:00</span>
+                <span id="total-time">0:00</span>
+            </div>
+            
+            <!-- Main playback controls row -->
+            <div class="main-player-row">
+                <button class="control-button player-btn" id="play-pause-btn">
+                    <i class="fas fa-play" id="play-pause-icon"></i>
+                </button>
+                
+                <div class="progress-bar-container">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill"></div>
+                        <div class="progress-handle" id="progress-handle"></div>
+                    </div>
+                </div>
+                
+                <div class="volume-control">
+                    <button class="control-button volume-btn" id="volume-btn">
+                        <i class="fas fa-volume-up" id="volume-icon"></i>
+                    </button>
+                    <div class="volume-popup" id="volume-popup">
+                        <div class="volume-slider-vertical">
+                            <div class="volume-fill-vertical" id="volume-fill-vertical"></div>
+                            <div class="volume-handle-vertical" id="volume-handle-vertical"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <div class="controls-section">
             <div class="upload-wrapper">
