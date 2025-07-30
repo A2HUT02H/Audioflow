@@ -21,7 +21,15 @@ from mutagen.mp4 import MP4Cover
 # --- App and Global Variable Setup ---
 thread_lock = Lock()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
+
+# Use local uploads directory (works with or without persistent disk)
+if os.environ.get('RENDER'):
+    # On Render, use local uploads directory (temporary, but works without persistent disk)
+    UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
+else:
+    # Local development
+    UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
+
 ALLOWED_EXTENSIONS = {'mp3', 'wav', 'ogg', 'flac', 'm4a'}
 
 app = Flask(__name__, static_url_path='/static')
@@ -135,24 +143,54 @@ def serve_file(filename):
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    """Handle audio file uploads with robust error handling."""
+    """Handle audio file uploads with robust error handling and cloud storage support."""
+    print(f"[DEBUG] Upload endpoint called. Upload folder: {app.config['UPLOAD_FOLDER']}")
+    print(f"[DEBUG] Upload folder exists: {os.path.exists(app.config['UPLOAD_FOLDER'])}")
+    
     room = request.form.get('room')
+    print(f"[DEBUG] Room from request: {room}")
+    print(f"[DEBUG] Available rooms: {list(rooms_data.keys())}")
+    
     if not room or room not in rooms_data:
+        print(f"[ERROR] Invalid room: {room}")
         return jsonify({'success': False, 'error': 'Invalid or expired room'}), 400
         
     if 'audio' not in request.files:
         return jsonify({'success': False, 'error': 'No file part in the request'}), 400
 
     file = request.files['audio']
-    if file.filename == '' or not allowed_file(file.filename):
+    if not file.filename or file.filename == '' or not allowed_file(file.filename):
         return jsonify({'success': False, 'error': 'File not allowed or not selected'}), 400
 
     try:
         from werkzeug.utils import secure_filename
-        filename = secure_filename(file.filename)
+        # Ensure filename is not None before processing
+        original_filename = file.filename
+        if not original_filename:
+            return jsonify({'success': False, 'error': 'Invalid filename'}), 400
+            
+        filename = secure_filename(original_filename)
+        if not filename:  # secure_filename might return empty string for invalid names
+            filename = f"audio_{uuid.uuid4().hex[:8]}.mp3"
+            
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(file_path)
-        print(f"[Room {room}] - File saved: {filename}")
+        
+        # Ensure upload directory exists with proper error handling
+        try:
+            os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+            print(f"[DEBUG] Upload directory ensured: {app.config['UPLOAD_FOLDER']}")
+        except Exception as mkdir_error:
+            print(f"[ERROR] Failed to create upload directory: {mkdir_error}")
+            return jsonify({'success': False, 'error': f'Directory creation failed: {str(mkdir_error)}'}), 500
+        
+        # Save file with error handling
+        try:
+            file.save(file_path)
+            print(f"[DEBUG] File saved successfully: {file_path}")
+        except Exception as save_error:
+            print(f"[ERROR] Failed to save file: {save_error}")
+            return jsonify({'success': False, 'error': f'File save failed: {str(save_error)}'}), 500
+        print(f"[Room {room}] - File saved: {filename} (Original: {original_filename})")
 
         final_cover_filename = None
         # --- Using the new, robust helper function ---
@@ -181,8 +219,8 @@ def upload():
                 'last_updated_at': time.time(),
             })
 
-        socketio.emit('new_file', {'filename': filename, 'cover': final_cover_filename}, room=room)
-        socketio.emit('pause', {'time': 0}, room=room)
+        socketio.emit('new_file', {'filename': filename, 'cover': final_cover_filename}, to=room)
+        socketio.emit('pause', {'time': 0}, to=room)
         
         return jsonify({'success': True, 'filename': filename})
 
@@ -193,7 +231,7 @@ def upload():
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         return jsonify({
             'success': False,
-            'error': 'A critical server error occurred. Please check the logs.'
+            'error': f'Upload failed: {str(e)}'
         }), 500
 
 
