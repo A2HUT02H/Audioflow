@@ -13,6 +13,21 @@ document.addEventListener('DOMContentLoaded', () => {
     const coverDancingBarsLeft = document.querySelector('.cover-dancing-bars.left');
     const coverDancingBarsRight = document.querySelector('.cover-dancing-bars.right');
 
+    // --- Custom Player Elements ---
+    const playPauseBtn = document.getElementById('play-pause-btn');
+    const playPauseIcon = document.getElementById('play-pause-icon');
+    const currentTimeDisplay = document.getElementById('current-time');
+    const totalTimeDisplay = document.getElementById('total-time');
+    const progressBar = document.querySelector('.progress-bar');
+    const progressFill = document.getElementById('progress-fill');
+    const progressHandle = document.getElementById('progress-handle');
+    const volumeBtn = document.getElementById('volume-btn');
+    const volumeIcon = document.getElementById('volume-icon');
+    const volumePopup = document.getElementById('volume-popup');
+    const volumeSliderVertical = document.querySelector('.volume-slider-vertical');
+    const volumeFillVertical = document.getElementById('volume-fill-vertical');
+    const volumeHandleVertical = document.getElementById('volume-handle-vertical');
+
     // --- State & Configuration ---
     const roomId = document.body.dataset.roomId;
     let isReceivingUpdate = false;
@@ -20,7 +35,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let seekDebounceTimer = null;
     let pingInterval;
     let currentDominantColor = null;
+    let currentColorPalette = null;
     let themeUpdateTimeout;
+    let isDraggingProgress = false;
+    let isDraggingVolume = false;
+    let lastVolume = 0.7; // Remember last volume for mute/unmute
 
     let serverTimeOffset = 0;
 
@@ -227,6 +246,286 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    // =================================================================================
+    // Custom Player Functions
+    // =================================================================================
+
+    function formatTime(seconds) {
+        if (isNaN(seconds)) return '0:00';
+        const minutes = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${minutes}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    function updateProgressBar() {
+        if (isDraggingProgress) return;
+        
+        const progress = player.duration ? (player.currentTime / player.duration) * 100 : 0;
+        progressFill.style.width = `${progress}%`;
+        progressHandle.style.left = `${progress}%`;
+        
+        currentTimeDisplay.textContent = formatTime(player.currentTime);
+        totalTimeDisplay.textContent = formatTime(player.duration);
+    }
+
+    function updateVolumeDisplay() {
+        if (isDraggingVolume) return;
+        
+        const volumePercent = player.volume * 100;
+        volumeFillVertical.style.height = `${volumePercent}%`;
+        volumeHandleVertical.style.bottom = `${volumePercent}%`;
+        
+        // Update volume icon based on volume level
+        if (player.volume === 0) {
+            volumeIcon.className = 'fas fa-volume-mute';
+        } else if (player.volume < 0.5) {
+            volumeIcon.className = 'fas fa-volume-down';
+        } else {
+            volumeIcon.className = 'fas fa-volume-up';
+        }
+    }
+
+    function showVolumePopup() {
+        volumePopup.style.display = 'block';
+        setTimeout(() => volumePopup.classList.add('show'), 10);
+    }
+
+    function hideVolumePopup() {
+        volumePopup.classList.remove('show');
+        setTimeout(() => volumePopup.style.display = 'none', 300);
+    }
+
+    function toggleMute() {
+        if (player.volume === 0) {
+            // Unmute: restore last volume
+            player.volume = lastVolume > 0 ? lastVolume : 0.7;
+        } else {
+            // Mute: save current volume and set to 0
+            lastVolume = player.volume;
+            player.volume = 0;
+        }
+        updateVolumeDisplay();
+    }
+
+    function hideVolumePopupOnClickOutside(e) {
+        if (!volumeBtn.contains(e.target) && !volumePopup.contains(e.target)) {
+            hideVolumePopup();
+        }
+    }
+
+    function updatePlayPauseButton() {
+        if (player.paused) {
+            playPauseIcon.className = 'fas fa-play';
+        } else {
+            playPauseIcon.className = 'fas fa-pause';
+        }
+    }
+
+    function handleProgressBarClick(e) {
+        if (!player.duration) return;
+        
+        const rect = progressBar.getBoundingClientRect();
+        const clickX = e.clientX - rect.left;
+        const progress = clickX / rect.width;
+        const newTime = progress * player.duration;
+        
+        player.currentTime = newTime;
+        updateProgressBar();
+    }
+
+    function handleVolumeSliderClick(e) {
+        const rect = volumeSliderVertical.getBoundingClientRect();
+        const clickY = e.clientY - rect.top;
+        const volume = Math.max(0, Math.min(1, 1 - (clickY / rect.height))); // Inverted for vertical
+        
+        player.volume = volume;
+        if (volume > 0) {
+            lastVolume = volume;
+        }
+        updateVolumeDisplay();
+    }
+
+    function setupProgressDragging() {
+        let startX, startProgress;
+
+        function onMouseDown(e) {
+            isDraggingProgress = true;
+            startX = e.clientX;
+            startProgress = player.duration ? player.currentTime / player.duration : 0;
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+            e.preventDefault();
+        }
+
+        function onMouseMove(e) {
+            if (!isDraggingProgress || !player.duration) return;
+            
+            const rect = progressBar.getBoundingClientRect();
+            const deltaX = e.clientX - startX;
+            const deltaProgress = deltaX / rect.width;
+            const newProgress = Math.max(0, Math.min(1, startProgress + deltaProgress));
+            
+            const newTime = newProgress * player.duration;
+            player.currentTime = newTime;
+            
+            const progressPercent = newProgress * 100;
+            progressFill.style.width = `${progressPercent}%`;
+            progressHandle.style.left = `${progressPercent}%`;
+            currentTimeDisplay.textContent = formatTime(newTime);
+        }
+
+        function onMouseUp() {
+            isDraggingProgress = false;
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        }
+
+        progressHandle.addEventListener('mousedown', onMouseDown);
+        progressBar.addEventListener('mousedown', onMouseDown);
+    }
+
+    function setupVolumeDragging() {
+        let startY, startVolume;
+
+        function onMouseDown(e) {
+            isDraggingVolume = true;
+            startY = e.clientY;
+            startVolume = player.volume;
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+            e.preventDefault();
+        }
+
+        function onMouseMove(e) {
+            if (!isDraggingVolume) return;
+            
+            const rect = volumeSliderVertical.getBoundingClientRect();
+            const deltaY = e.clientY - startY;
+            const deltaVolume = -deltaY / rect.height; // Negative because Y increases downward
+            const newVolume = Math.max(0, Math.min(1, startVolume + deltaVolume));
+            
+            player.volume = newVolume;
+            if (newVolume > 0) {
+                lastVolume = newVolume;
+            }
+            
+            const volumePercent = newVolume * 100;
+            volumeFillVertical.style.height = `${volumePercent}%`;
+            volumeHandleVertical.style.bottom = `${volumePercent}%`;
+            
+            // Update volume icon
+            if (newVolume === 0) {
+                volumeIcon.className = 'fas fa-volume-mute';
+            } else if (newVolume < 0.5) {
+                volumeIcon.className = 'fas fa-volume-down';
+            } else {
+                volumeIcon.className = 'fas fa-volume-up';
+            }
+        }
+
+        function onMouseUp() {
+            isDraggingVolume = false;
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        }
+
+        volumeHandleVertical.addEventListener('mousedown', onMouseDown);
+        volumeSliderVertical.addEventListener('mousedown', onMouseDown);
+    }
+
+    // Initialize custom player
+    function initCustomPlayer() {
+        // Set initial volume
+        player.volume = lastVolume;
+        updateVolumeDisplay();
+        updatePlayPauseButton();
+        updateProgressBar();
+
+        // Play/Pause button
+        playPauseBtn.addEventListener('click', () => {
+            if (player.paused) {
+                player.play();
+            } else {
+                player.pause();
+            }
+        });
+
+        // Volume button (toggle mute)
+        volumeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleMute();
+        });
+
+        // Show volume popup on hover
+        volumeBtn.addEventListener('mouseenter', () => {
+            showVolumePopup();
+        });
+
+        // Hide volume popup when mouse leaves both button and popup
+        volumeBtn.addEventListener('mouseleave', (e) => {
+            setTimeout(() => {
+                if (!volumePopup.matches(':hover') && !volumeBtn.matches(':hover')) {
+                    hideVolumePopup();
+                }
+            }, 100);
+        });
+
+        volumePopup.addEventListener('mouseleave', (e) => {
+            setTimeout(() => {
+                if (!volumePopup.matches(':hover') && !volumeBtn.matches(':hover')) {
+                    hideVolumePopup();
+                }
+            }, 100);
+        });
+
+        // Progress bar click
+        progressBar.addEventListener('click', handleProgressBarClick);
+        
+        // Volume slider click
+        volumeSliderVertical.addEventListener('click', handleVolumeSliderClick);
+
+        // Setup dragging
+        setupProgressDragging();
+        setupVolumeDragging();
+
+        // Player event listeners for custom controls
+        player.addEventListener('loadedmetadata', () => {
+            updateProgressBar();
+        });
+
+        player.addEventListener('timeupdate', () => {
+            updateProgressBar();
+        });
+
+        player.addEventListener('play', () => {
+            updatePlayPauseButton();
+        });
+
+        player.addEventListener('pause', () => {
+            updatePlayPauseButton();
+        });
+
+        player.addEventListener('volumechange', () => {
+            updateVolumeDisplay();
+        });
+    }
+
+    // Initialize the custom player
+    initCustomPlayer();
+
+    // Close volume popup when clicking outside
+    document.addEventListener('click', (e) => {
+        const volumePopup = document.querySelector('.volume-popup');
+        const volumeBtn = document.querySelector('.volume-btn');
+        
+        if (volumePopup && volumeBtn && 
+            !volumePopup.contains(e.target) && 
+            !volumeBtn.contains(e.target) &&
+            volumePopup.classList.contains('show')) {
+            hideVolumePopup();
+        }
+    });
 
     // =================================================================================
     // User Action Event Listeners
@@ -467,10 +766,12 @@ document.addEventListener('DOMContentLoaded', () => {
             coverArt.onload = () => {
                 try {
                     const dominantColor = colorThief.getColor(coverArt);
+                    const palette = colorThief.getPalette(coverArt, 3); // Get top 3 colors
                     currentDominantColor = dominantColor;
+                    currentColorPalette = palette;
                     const [r, g, b] = dominantColor;
                     coverArt.style.boxShadow = `0 0 15px rgba(${r},${g},${b},0.6), 0 0 35px rgba(${r},${g},${b},0.4)`;
-                    applyTheme(dominantColor);
+                    applyTheme(dominantColor, palette);
                 } catch (e) {
                     resetTheme();
                 }
@@ -483,6 +784,7 @@ document.addEventListener('DOMContentLoaded', () => {
             coverArt.src = '';
             coverArt.style.display = 'none';
             currentDominantColor = null;
+            currentColorPalette = null;
             resetTheme();
         }
     }
@@ -519,7 +821,7 @@ document.addEventListener('DOMContentLoaded', () => {
         clearTimeout(themeUpdateTimeout);
         themeUpdateTimeout = setTimeout(() => {
             if (currentDominantColor) {
-                applyTheme(currentDominantColor);
+                applyTheme(currentDominantColor, currentColorPalette);
             } else {
                 resetTheme();
             }
@@ -530,67 +832,477 @@ document.addEventListener('DOMContentLoaded', () => {
         return (r * 299 + g * 587 + b * 114) / 1000;
     }
 
-    function applyTheme(c) {
-        const [r, g, b] = c;
-        const isDarkColor = getBrightness(r, g, b) < 50;
-        const textColor = getBrightness(r, g, b) > 140 ? '#000' : '#FFF';
-        const gradient = `linear-gradient(90deg,rgb(${r},${g},${b}),rgb(${Math.min(255,r+40)},${Math.min(255,g+40)},${Math.min(255,b+40)}))`;
+    function getColorDistance(color1, color2) {
+        const [r1, g1, b1] = color1;
+        const [r2, g2, b2] = color2;
+        
+        // Calculate Euclidean distance in RGB space
+        return Math.sqrt(
+            Math.pow(r2 - r1, 2) + 
+            Math.pow(g2 - g1, 2) + 
+            Math.pow(b2 - b1, 2)
+        );
+    }
 
-        if (fileNameDisplay.classList.contains('playing')) {
-            if (isDarkColor) {
-                fileNameDisplay.style.borderColor = 'var(--accent-color)';
-                // Update CSS custom property for playing-pulse animation
-                document.documentElement.style.setProperty('--current-border-color', 'var(--accent-color)');
-            } else {
-                fileNameDisplay.style.borderColor = `rgb(${r},${g},${b})`;
-                // Update CSS custom property for playing-pulse animation
-                document.documentElement.style.setProperty('--current-border-color', `rgb(${r},${g},${b})`);
+    function createColorShades(r, g, b) {
+        // Create lighter shade (for top of gradient) - very subtle blend
+        const lightR = Math.min(255, Math.round(r + (255 - r) * 0.02));
+        const lightG = Math.min(255, Math.round(g + (255 - g) * 0.02));
+        const lightB = Math.min(255, Math.round(b + (255 - b) * 0.02));
+        
+        // Original color (for middle)
+        const normalR = r;
+        const normalG = g;
+        const normalB = b;
+        
+        // Create darker shade (for bottom of gradient)
+        const darkR = Math.max(0, Math.round(r * 0.7));
+        const darkG = Math.max(0, Math.round(g * 0.7));
+        const darkB = Math.max(0, Math.round(b * 0.7));
+        
+        return {
+            light: { r: lightR, g: lightG, b: lightB },
+            normal: { r: normalR, g: normalG, b: normalB },
+            dark: { r: darkR, g: darkG, b: darkB }
+        };
+    }
+
+    function getSecondaryColorOrShades(dominantColor, palette) {
+        if (!palette || palette.length < 2) {
+            // No palette available, use shade-based approach
+            const [r, g, b] = dominantColor;
+            return createColorShades(r, g, b);
+        }
+
+        let secondaryColor = palette[1]; // Second color in palette
+        let colorDistance = getColorDistance(dominantColor, secondaryColor);
+        
+        // If dominant and second colors are too similar, try third color
+        if (colorDistance < 50 && palette.length >= 3) {
+            const thirdColor = palette[2];
+            const thirdColorDistance = getColorDistance(dominantColor, thirdColor);
+            
+            // Use third color if it has better contrast than second color
+            if (thirdColorDistance > colorDistance) {
+                secondaryColor = thirdColor;
+                colorDistance = thirdColorDistance;
+                console.log('Using third dominant color for better contrast');
             }
+        }
+        
+        // If colors are still too similar (distance < 50), use shade-based approach
+        if (colorDistance < 50) {
+            const [r, g, b] = dominantColor;
+            return createColorShades(r, g, b);
+        }
+
+        // Use secondary color for variations
+        const [r, g, b] = dominantColor;
+        const [sr, sg, sb] = secondaryColor;
+        
+        // Create variations using both dominant and secondary colors
+        // But ALWAYS use darkened version of dominant color for dark shade
+        return {
+            light: { r: Math.min(255, Math.round((r + sr) / 2 + 5)), 
+                    g: Math.min(255, Math.round((g + sg) / 2 + 5)), 
+                    b: Math.min(255, Math.round((b + sb) / 2 + 5)) },
+            normal: { r, g, b }, // Keep dominant as normal
+            dark: { r: Math.max(0, Math.round(r * 0.7)), 
+                   g: Math.max(0, Math.round(g * 0.7)), 
+                   b: Math.max(0, Math.round(b * 0.7)) } // Always use darkened dominant color
+        };
+    }
+
+    function applyTheme(c, palette = null) {
+        const [r, g, b] = c;
+        const isDarkColor = getBrightness(r, g, b) < 128;
+        const shades = getSecondaryColorOrShades(c, palette);
+        
+        // Create three-shade gradient for container background - extended blending area
+        const containerGradient = `linear-gradient(0deg, 
+            rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}), 
+            rgb(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}) 40%, 
+            rgb(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}) 60%,
+            rgb(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}) 80%,
+            rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b}))`;
+        
+        // Apply container background
+        const container = document.querySelector('.container');
+        if (container) {
+            container.style.background = containerGradient;
+            container.style.backdropFilter = 'blur(12px)';
+            container.style.webkitBackdropFilter = 'blur(12px)';
+        }
+        
+        // Determine text and button colors based on brightness
+        let textColor, buttonColor, buttonTextColor;
+        if (isDarkColor) {
+            // If extracted color is dark, use light version for text/buttons
+            textColor = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
+            buttonColor = `linear-gradient(90deg, rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b}), rgb(${Math.min(255, shades.light.r + 20)}, ${Math.min(255, shades.light.g + 20)}, ${Math.min(255, shades.light.b + 20)}))`;
+            buttonTextColor = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
+        } else {
+            // If extracted color is light, use dark version for text/buttons
+            textColor = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
+            buttonColor = `linear-gradient(90deg, rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}), rgb(${Math.max(0, shades.dark.r - 20)}, ${Math.max(0, shades.dark.g - 20)}, ${Math.max(0, shades.dark.b - 20)}))`;
+            buttonTextColor = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
+        }
+        
+        // Apply text colors
+        const mainHeading = document.querySelector('.main-heading');
+        const memberCount = document.querySelector('.member-count');
+        const roomCodeDisplay = document.querySelector('.room-code-display');
+        const fileNameText = document.querySelector('#file-name-text');
+        
+        if (mainHeading) {
+            // For the heading, use the opposite shade based on background brightness
+            // The background at the top is the light shade, so we need to consider its brightness
+            const topBrightness = getBrightness(shades.light.r, shades.light.g, shades.light.b);
+            let headingColor;
+            
+            if (topBrightness > 128) {
+                // Light background at top - use dark color for heading
+                headingColor = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
+            } else {
+                // Dark background at top - use light color for heading
+                headingColor = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
+            }
+            
+            // Force clear any existing styles and apply new color
+            mainHeading.style.removeProperty('background');
+            mainHeading.style.removeProperty('background-image');
+            mainHeading.style.removeProperty('-webkit-background-clip');
+            mainHeading.style.removeProperty('-webkit-text-fill-color');
+            mainHeading.style.removeProperty('background-clip');
+            mainHeading.style.color = headingColor;
+            mainHeading.style.setProperty('color', headingColor, 'important');
+            
+            console.log(`Heading color set to: ${headingColor} (top brightness: ${topBrightness})`);
+        }
+        
+        if (memberCount) memberCount.style.color = textColor;
+        if (roomCodeDisplay) {
+            roomCodeDisplay.style.color = textColor;
+            roomCodeDisplay.style.borderColor = textColor;
+        }
+        if (fileNameText) fileNameText.style.color = textColor;
+        
+        // Apply button styles
+        controlButtons.forEach(e => {
+            e.style.background = `linear-gradient(135deg, 
+                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15) 0%,
+                rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.08) 50%,
+                rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.05) 100%)`;
+            e.style.borderColor = `rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.25)`;
+            
+            // Enhanced contrast logic for button text
+            const avgBackgroundBrightness = (getBrightness(shades.light.r, shades.light.g, shades.light.b) + 
+                                           getBrightness(shades.normal.r, shades.normal.g, shades.normal.b) + 
+                                           getBrightness(shades.dark.r, shades.dark.g, shades.dark.b)) / 3;
+            
+            // Use high contrast colors with minimum difference threshold
+            if (avgBackgroundBrightness > 140) {
+                // Light background - use pure black for maximum contrast
+                e.style.color = 'black';
+            } else if (avgBackgroundBrightness < 115) {
+                // Dark background - use pure white for maximum contrast
+                e.style.color = 'white';
+            } else {
+                // Medium brightness - use the color with highest contrast
+                const lightContrast = Math.abs(avgBackgroundBrightness - getBrightness(shades.light.r, shades.light.g, shades.light.b));
+                const darkContrast = Math.abs(avgBackgroundBrightness - getBrightness(shades.dark.r, shades.dark.g, shades.dark.b));
+                
+                if (lightContrast > darkContrast) {
+                    e.style.color = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
+                } else {
+                    e.style.color = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
+                }
+            }
+            
+            e.style.boxShadow = `
+                0 8px 32px 0 rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.3),
+                inset 0 1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15),
+                inset 0 -1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.08)`;
+        });
+        
+        // Apply to create new room button
+        const createRoomBtn = document.querySelector('.create-new-room-button');
+        if (createRoomBtn) {
+            createRoomBtn.style.background = `linear-gradient(135deg, 
+                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15) 0%,
+                rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.08) 50%,
+                rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.05) 100%)`;
+            createRoomBtn.style.borderColor = `rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.25)`;
+            
+            // Enhanced contrast logic for create room button text
+            const avgBackgroundBrightness = (getBrightness(shades.light.r, shades.light.g, shades.light.b) + 
+                                           getBrightness(shades.normal.r, shades.normal.g, shades.normal.b) + 
+                                           getBrightness(shades.dark.r, shades.dark.g, shades.dark.b)) / 3;
+            
+            if (avgBackgroundBrightness > 140) {
+                createRoomBtn.style.color = 'black';
+            } else if (avgBackgroundBrightness < 115) {
+                createRoomBtn.style.color = 'white';
+            } else {
+                const lightContrast = Math.abs(avgBackgroundBrightness - getBrightness(shades.light.r, shades.light.g, shades.light.b));
+                const darkContrast = Math.abs(avgBackgroundBrightness - getBrightness(shades.dark.r, shades.dark.g, shades.dark.b));
+                
+                if (lightContrast > darkContrast) {
+                    createRoomBtn.style.color = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
+                } else {
+                    createRoomBtn.style.color = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
+                }
+            }
+            
+            createRoomBtn.style.boxShadow = `
+                0 8px 32px 0 rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.3),
+                inset 0 1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15),
+                inset 0 -1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.08)`;
+        }
+
+        // Apply custom player styling
+        const customPlayer = document.querySelector('.custom-player');
+        if (customPlayer) {
+            customPlayer.style.background = `linear-gradient(135deg, 
+                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15) 0%,
+                rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.08) 50%,
+                rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.05) 100%)`;
+            customPlayer.style.borderColor = `rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.25)`;
+            customPlayer.style.boxShadow = `
+                0 8px 32px 0 rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.3),
+                inset 0 1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15),
+                inset 0 -1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.08)`;
+        }
+
+        // Style time displays with enhanced contrast
+        const timeDisplays = document.querySelectorAll('.player-time-display');
+        timeDisplays.forEach(display => {
+            // Calculate contrast against the background where time displays appear
+            const backgroundBrightness = getBrightness(shades.normal.r, shades.normal.g, shades.normal.b);
+            
+            if (backgroundBrightness > 140) {
+                display.style.color = 'black';
+            } else if (backgroundBrightness < 115) {
+                display.style.color = 'white';
+            } else {
+                // Use the color with highest contrast
+                const lightBrightness = getBrightness(shades.light.r, shades.light.g, shades.light.b);
+                const darkBrightness = getBrightness(shades.dark.r, shades.dark.g, shades.dark.b);
+                
+                const lightContrast = Math.abs(backgroundBrightness - lightBrightness);
+                const darkContrast = Math.abs(backgroundBrightness - darkBrightness);
+                
+                if (lightContrast > darkContrast) {
+                    display.style.color = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
+                } else {
+                    display.style.color = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
+                }
+            }
+        });
+
+        // Style progress and volume bars
+        if (progressFill) {
+            progressFill.style.background = buttonColor;
+        }
+        if (volumeFillVertical) {
+            volumeFillVertical.style.background = buttonColor;
+        }
+
+        // Style progress and volume handles
+        const handles = document.querySelectorAll('.progress-handle, .volume-handle');
+        handles.forEach(handle => {
+            handle.style.background = buttonTextColor;
+            handle.style.boxShadow = `0 2px 8px rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.4)`;
+        });
+
+        // Style progress and volume background bars
+        const progressBar = document.querySelector('.progress-bar');
+        const volumeSliderVertical = document.querySelector('.volume-slider-vertical');
+        const volumePopup = document.querySelector('.volume-popup');
+        if (progressBar) {
+            progressBar.style.background = `linear-gradient(90deg, 
+                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.12) 0%,
+                rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.08) 50%,
+                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.12) 100%)`;
+            progressBar.style.borderColor = `rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.15)`;
+        }
+        if (volumeSliderVertical) {
+            volumeSliderVertical.style.background = `linear-gradient(180deg, 
+                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15) 0%,
+                rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.08) 50%,
+                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15) 100%)`;
+            volumeSliderVertical.style.borderColor = `rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.15)`;
+        }
+        if (volumePopup) {
+            volumePopup.style.background = `linear-gradient(135deg, 
+                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.12) 0%,
+                rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.06) 50%,
+                rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.03) 100%)`;
+            volumePopup.style.borderColor = `rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.25)`;
+            volumePopup.style.boxShadow = `
+                0 8px 32px 0 rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.3),
+                inset 0 1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15),
+                inset 0 -1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.08)`;
+        }
+
+        // Handle file name border and bars for playing state
+        if (fileNameDisplay.classList.contains('playing')) {
+            fileNameDisplay.style.borderColor = textColor;
+            document.documentElement.style.setProperty('--current-border-color', textColor);
+            
+            // Use improved secondary color selection for dancing bars
+            let barColor = buttonColor; // Default fallback
+            let glowColor = `${shades.normal.r},${shades.normal.g},${shades.normal.b}`;
+            let barColorForHeading = textColor; // Default to textColor
+            
+            if (palette && palette.length >= 2) {
+                let secondaryColor = palette[1];
+                let colorDistance = getColorDistance(c, secondaryColor);
+                
+                // If dominant and second colors are too similar, try third color
+                if (colorDistance < 50 && palette.length >= 3) {
+                    const thirdColor = palette[2];
+                    const thirdColorDistance = getColorDistance(c, thirdColor);
+                    
+                    if (thirdColorDistance > colorDistance) {
+                        secondaryColor = thirdColor;
+                        console.log('Using third dominant color for dancing bars');
+                    }
+                }
+                
+                const [sr, sg, sb] = secondaryColor;
+                barColor = `linear-gradient(90deg, rgb(${sr}, ${sg}, ${sb}), rgb(${Math.min(255, sr + 20)}, ${Math.min(255, sg + 20)}, ${Math.min(255, sb + 20)}))`;
+                glowColor = `${sr},${sg},${sb}`;
+                barColorForHeading = `rgb(${sr}, ${sg}, ${sb})`;
+            }
+            
+            // Set CSS variables for both dancing bars and heading
+            document.documentElement.style.setProperty('--current-bar-color', barColorForHeading);
+            
+            document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => {
+                bar.style.background = barColor;
+                bar.style.boxShadow = `0 0 8px rgb(${glowColor})`;
+            });
         } else {
             fileNameDisplay.style.borderColor = '';
             document.documentElement.style.removeProperty('--current-border-color');
-        }
-
-        if (isDarkColor) {
-            controlButtons.forEach(e => {
-                e.style.background = '';
-                e.style.color = ''
+            document.documentElement.style.removeProperty('--current-bar-color');
+            
+            document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => {
+                bar.style.background = '';
+                bar.style.boxShadow = '';
             });
-            if (fileNameDisplay.classList.contains('playing')) {
-                document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => bar.style.background = 'var(--accent-color)');
-                document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => bar.style.boxShadow = '0 0 8px var(--accent-color)');
-            } else {
-                document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => bar.style.background = '');
-                document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => bar.style.boxShadow = '');
-            }
-            return;
-        }
-
-        controlButtons.forEach(e => {
-            e.style.background = gradient;
-            e.style.color = textColor
-        });
-        if (fileNameDisplay.classList.contains('playing')) {
-            document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => bar.style.background = gradient);
-            document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => bar.style.boxShadow = `0 0 8px rgb(${r},${g},${b})`);
-        } else {
-            document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => bar.style.background = '');
-            document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => bar.style.boxShadow = '');
         }
     }
 
     function resetTheme() {
+        // Reset container background to default
+        const container = document.querySelector('.container');
+        if (container) {
+            container.style.background = '';
+            container.style.backdropFilter = '';
+            container.style.webkitBackdropFilter = '';
+        }
+        
+        // Reset text colors
+        const mainHeading = document.querySelector('.main-heading');
+        const memberCount = document.querySelector('.member-count');
+        const roomCodeDisplay = document.querySelector('.room-code-display');
+        const fileNameText = document.querySelector('#file-name-text');
+        
+        if (mainHeading) {
+            mainHeading.style.removeProperty('background');
+            mainHeading.style.removeProperty('background-image');
+            mainHeading.style.removeProperty('-webkit-background-clip');
+            mainHeading.style.removeProperty('-webkit-text-fill-color');
+            mainHeading.style.removeProperty('background-clip');
+            mainHeading.style.removeProperty('color');
+        }
+        
+        if (memberCount) memberCount.style.color = '';
+        if (roomCodeDisplay) {
+            roomCodeDisplay.style.color = '';
+            roomCodeDisplay.style.borderColor = '';
+        }
+        if (fileNameText) fileNameText.style.color = '';
+        
+        // Reset button styles
         controlButtons.forEach(e => {
             e.style.background = '';
-            e.style.color = ''
+            e.style.color = '';
+            e.style.borderColor = '';
+            e.style.boxShadow = '';
+            e.style.textShadow = '';
         });
+        
+        // Reset create new room button
+        const createRoomBtn = document.querySelector('.create-new-room-button');
+        if (createRoomBtn) {
+            createRoomBtn.style.background = '';
+            createRoomBtn.style.color = '';
+            createRoomBtn.style.borderColor = '';
+            createRoomBtn.style.boxShadow = '';
+            createRoomBtn.style.textShadow = '';
+        }
+
+        // Reset custom player styling
+        const customPlayer = document.querySelector('.custom-player');
+        if (customPlayer) {
+            customPlayer.style.background = '';
+            customPlayer.style.borderColor = '';
+            customPlayer.style.boxShadow = '';
+        }
+
+        // Reset time displays
+        const timeDisplays = document.querySelectorAll('.player-time-display');
+        timeDisplays.forEach(display => {
+            display.style.color = '';
+            display.style.textShadow = '';
+        });
+
+        // Reset progress and volume bars
+        if (progressFill) {
+            progressFill.style.background = '';
+        }
+        if (volumeFillVertical) {
+            volumeFillVertical.style.background = '';
+        }
+
+        // Reset handles
+        const handles = document.querySelectorAll('.progress-handle, .volume-handle');
+        handles.forEach(handle => {
+            handle.style.background = '';
+            handle.style.boxShadow = '';
+        });
+
+        // Reset background bars
+        const progressBar = document.querySelector('.progress-bar');
+        const volumeSliderVertical = document.querySelector('.volume-slider-vertical');
+        const volumePopup = document.querySelector('.volume-popup');
+        if (progressBar) {
+            progressBar.style.background = '';
+            progressBar.style.borderColor = '';
+        }
+        if (volumeSliderVertical) {
+            volumeSliderVertical.style.background = '';
+            volumeSliderVertical.style.borderColor = '';
+        }
+        if (volumePopup) {
+            volumePopup.style.background = '';
+            volumePopup.style.borderColor = '';
+            volumePopup.style.boxShadow = '';
+        }
+        
+        // Reset bars and borders
         document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => {
             bar.style.background = '';
             bar.style.boxShadow = '';
         });
         fileNameDisplay.style.borderColor = '';
         document.documentElement.style.removeProperty('--current-border-color');
+        document.documentElement.style.removeProperty('--current-bar-color');
         currentDominantColor = null;
+        currentColorPalette = null;
     }
 
     function updateMemberCount(count) {
@@ -598,6 +1310,33 @@ document.addEventListener('DOMContentLoaded', () => {
         if (memberCountElement) {
             memberCountElement.innerHTML = `<i class="fa-solid fa-user-group"></i> ${count}`;
             console.log(`Member count updated: ${count}`);
+        }
+    }
+
+    function updateFileNameAnimation() {
+        if (!fileNameText || !fileNameDisplay) return;
+        
+        const containerWidth = fileNameDisplay.offsetWidth - 40; // Account for padding
+        const textWidth = fileNameText.scrollWidth;
+        
+        // Remove existing classes
+        fileNameText.classList.remove('long');
+        fileNameDisplay.classList.remove('is-overflowing');
+        
+        // Reset animation styles
+        fileNameText.style.removeProperty('--slide-duration');
+        fileNameText.style.removeProperty('--slide-distance');
+        
+        if (textWidth > containerWidth) {
+            // Text is overflowing, set up animation
+            fileNameDisplay.classList.add('is-overflowing');
+            fileNameText.classList.add('long');
+            
+            const slideDistance = -(textWidth - containerWidth + 20); // Extra space for smooth transition
+            const duration = Math.max(8, Math.abs(slideDistance) / 50); // Adjust speed as needed
+            
+            fileNameText.style.setProperty('--slide-distance', `${slideDistance}px`);
+            fileNameText.style.setProperty('--slide-duration', `${duration}s`);
         }
     }
 });
