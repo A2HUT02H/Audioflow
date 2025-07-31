@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileNameDisplay = document.getElementById('file-name');
     const fileNameText = document.getElementById('file-name-text');
     const coverArt = document.getElementById('cover-art');
+    const coverArtPlaceholder = document.getElementById('cover-art-placeholder');
     const controlButtons = document.querySelectorAll('.control-button');
     const coverDancingBarsLeft = document.querySelector('.cover-dancing-bars.left');
     const coverDancingBarsRight = document.querySelector('.cover-dancing-bars.right');
@@ -49,8 +50,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Audio Visualizer Setup ---
     let audioContext = null;
     let analyser = null;
+    let leftAnalyser = null;
+    let rightAnalyser = null;
     let dataArray = null;
+    let leftDataArray = null;
+    let rightDataArray = null;
     let source = null;
+    let splitter = null;
     let animationId = null;
     let visualizerInterval = null;
 
@@ -77,16 +83,37 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!audioContext) {
             try {
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // Create main analyser for fallback
                 analyser = audioContext.createAnalyser();
-                analyser.fftSize = 256; // Increased from 64 for better frequency resolution
-                analyser.smoothingTimeConstant = 0.3; // Reduced from 0.8 for more responsiveness
-                analyser.minDecibels = -90; // Lower threshold for quiet sounds
-                analyser.maxDecibels = -10; // Higher threshold for loud sounds
+                analyser.fftSize = 512;
+                analyser.smoothingTimeConstant = 0.3;
+                analyser.minDecibels = -90;
+                analyser.maxDecibels = -10;
+                
+                // Create separate analysers for left and right channels
+                leftAnalyser = audioContext.createAnalyser();
+                rightAnalyser = audioContext.createAnalyser();
+                
+                leftAnalyser.fftSize = 512;
+                leftAnalyser.smoothingTimeConstant = 0.3;
+                leftAnalyser.minDecibels = -90;
+                leftAnalyser.maxDecibels = -10;
+                
+                rightAnalyser.fftSize = 512;
+                rightAnalyser.smoothingTimeConstant = 0.3;
+                rightAnalyser.minDecibels = -90;
+                rightAnalyser.maxDecibels = -10;
+                
+                // Create channel splitter for stereo separation
+                splitter = audioContext.createChannelSplitter(2);
                 
                 const bufferLength = analyser.frequencyBinCount;
                 dataArray = new Uint8Array(bufferLength);
+                leftDataArray = new Uint8Array(leftAnalyser.frequencyBinCount);
+                rightDataArray = new Uint8Array(rightAnalyser.frequencyBinCount);
                 
-                console.log('Audio context initialized for visualizer with enhanced sensitivity');
+                console.log('Audio context initialized with stereo channel separation for left/right dancing bars');
             } catch (e) {
                 console.error('Could not initialize audio context:', e);
             }
@@ -94,20 +121,32 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function connectAudioSource() {
-        if (audioContext && analyser && !source) {
+        if (audioContext && analyser && leftAnalyser && rightAnalyser && splitter && !source) {
             try {
                 source = audioContext.createMediaElementSource(player);
+                
+                // Connect to main analyser (fallback)
                 source.connect(analyser);
+                
+                // Connect to stereo splitter
+                source.connect(splitter);
+                
+                // Connect split channels to their respective analysers
+                splitter.connect(leftAnalyser, 0); // Left channel (index 0) to left analyser
+                splitter.connect(rightAnalyser, 1); // Right channel (index 1) to right analyser
+                
+                // Connect to destination for audio output
                 source.connect(audioContext.destination);
-                console.log('Audio source connected to visualizer');
+                
+                console.log('Audio source connected with stereo channel separation');
             } catch (e) {
                 console.error('Could not connect audio source:', e);
-                // If source already exists, it might be disconnected, try to reconnect
+                // If stereo connection fails, try fallback to mono
                 if (source) {
                     try {
                         source.connect(analyser);
                         source.connect(audioContext.destination);
-                        console.log('Audio source reconnected to visualizer');
+                        console.log('Audio source connected in mono fallback mode');
                     } catch (reconnectError) {
                         console.error('Could not reconnect audio source:', reconnectError);
                     }
@@ -128,53 +167,63 @@ document.addEventListener('DOMContentLoaded', () => {
     function ensureAudioConnection() {
         console.log('ensureAudioConnection called');
         // Ensure audio context is active and connected
-        if (audioContext && source && analyser) {
+        if (audioContext && source && analyser && leftAnalyser && rightAnalyser) {
             try {
                 // Check if context is suspended and resume if needed
                 if (audioContext.state === 'suspended') {
                     audioContext.resume();
                 }
-                console.log('Audio connection verified after seek');
+                console.log('Stereo audio connection verified after seek');
             } catch (e) {
-                console.error('Error ensuring audio connection:', e);
+                console.error('Error ensuring stereo audio connection:', e);
             }
         } else {
-            console.log('Reconnecting audio source: context:', !!audioContext, 'source:', !!source, 'analyser:', !!analyser);
+            console.log('Reconnecting stereo audio source: context:', !!audioContext, 'source:', !!source, 'analysers:', !!leftAnalyser && !!rightAnalyser);
             // Reconnect if something is missing
             connectAudioSource();
         }
     }
 
     function updateVisualizerBars() {
-        if (!analyser || !dataArray) {
-            console.log('Visualizer not running: analyser or dataArray missing');
+        if (!leftAnalyser || !rightAnalyser || !leftDataArray || !rightDataArray) {
+            console.log('Stereo visualizer not running: analysers or data arrays missing');
             return;
         }
 
-        analyser.getByteFrequencyData(dataArray);
+        // Get frequency data for both channels
+        leftAnalyser.getByteFrequencyData(leftDataArray);
+        rightAnalyser.getByteFrequencyData(rightDataArray);
 
         const leftBars = coverDancingBarsLeft.querySelectorAll('.bar');
         const rightBars = coverDancingBarsRight.querySelectorAll('.bar');
 
-        const bin1 = dataArray[5];   // Low freq (bass)
-        const bin2 = dataArray[15];  // Mid freq
-        const bin3 = dataArray[25];  // High freq (treble)
+        // Process left channel data
+        const leftBass = leftDataArray[5];   // Low freq (bass)
+        const leftMid = leftDataArray[15];   // Mid freq
+        const leftTreble = leftDataArray[25]; // High freq (treble)
+
+        // Process right channel data
+        const rightBass = rightDataArray[5];   // Low freq (bass)
+        const rightMid = rightDataArray[15];   // Mid freq
+        const rightTreble = rightDataArray[25]; // High freq (treble)
 
         const normalize = (value, max = 255, silenceThreshold = 10, maxHeight = 180) => {
             if (value < silenceThreshold) return '0px';  // Fully collapse if quiet
             return `${(value / max) * maxHeight}px`;     // Scale height normally
         };
 
+        // Update left bars with left channel data (treble, mid, bass)
         if (leftBars.length >= 3) {
-            leftBars[0].style.height = normalize(bin3); // Treble
-            leftBars[1].style.height = normalize(bin2); // Mid
-            leftBars[2].style.height = normalize(bin1); // Bass
+            leftBars[0].style.height = normalize(leftTreble); // Treble
+            leftBars[1].style.height = normalize(leftMid);    // Mid
+            leftBars[2].style.height = normalize(leftBass);   // Bass
         }
 
+        // Update right bars with right channel data (bass, mid, treble)
         if (rightBars.length >= 3) {
-            rightBars[0].style.height = normalize(bin1); // Bass
-            rightBars[1].style.height = normalize(bin2); // Mid
-            rightBars[2].style.height = normalize(bin3); // Treble
+            rightBars[0].style.height = normalize(rightBass);   // Bass
+            rightBars[1].style.height = normalize(rightMid);    // Mid
+            rightBars[2].style.height = normalize(rightTreble); // Treble
         }
 
         if (!player.paused) {
@@ -746,7 +795,14 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             console.log('[DEBUG] File selected:', file.name, 'Size:', file.size, 'Type:', file.type);
-            fileNameText.textContent = `Uploading: ${file.name}`;
+            
+            // Add uploading class to prevent animation and enable proper truncation
+            fileNameDisplay.classList.add('uploading');
+            
+            // Truncate filename for display during upload to prevent overflow
+            const truncatedName = truncateFilename(file.name, 35); // Shorter limit for "Uploading: " prefix
+            fileNameText.textContent = `Uploading: ${truncatedName}`;
+            
             const formData = new FormData();
             formData.append('audio', file);
             formData.append('room', roomId);
@@ -759,6 +815,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 })
                 .then(data => {
                     console.log('[DEBUG] Upload response data:', data);
+                    // Remove uploading class when upload completes
+                    fileNameDisplay.classList.remove('uploading');
+                    
                     if (data.success) {
                         console.log('Upload successful. Waiting for new_file event.');
                     } else {
@@ -768,6 +827,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }).catch(error => {
                     console.error('Upload fetch error:', error);
+                    // Remove uploading class on error
+                    fileNameDisplay.classList.remove('uploading');
                     alert('An unexpected error occurred during upload.');
                     fileNameText.textContent = 'Upload error.';
                 });
@@ -898,12 +959,37 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     socket.on('new_file', (data) => {
-        loadAudio(data.filename, data.cover);
+        console.log('[DEBUG] Received new_file event with data:', data);
+        console.log('[DEBUG] Filename type:', typeof data.filename);
+        console.log('[DEBUG] Filename repr:', JSON.stringify(data.filename));
+        console.log('[DEBUG] Display filename:', JSON.stringify(data.filename_display));
+        console.log('[DEBUG] Display filename type:', typeof data.filename_display);
+        console.log('[DEBUG] Display filename length:', data.filename_display ? data.filename_display.length : 'null');
+        
+        // Test Unicode preservation
+        if (data.filename_display) {
+            console.log('[DEBUG] Display filename character codes:', Array.from(data.filename_display).map(c => c.charCodeAt(0)));
+            console.log('[DEBUG] Display filename contains Japanese chars:', /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(data.filename_display));
+        }
+        
+        // Use display filename if available, otherwise fallback to filename
+        const displayFilename = data.filename_display || data.filename;
+        console.log('[DEBUG] Final display filename for loadAudio:', JSON.stringify(displayFilename));
+        loadAudio(data.filename, data.cover, displayFilename);
     });
 
     socket.on('room_state', (data) => {
+        console.log('[DEBUG] Received room_state event with data:', data);
         if (data.current_file) {
-            loadAudio(data.current_file, data.current_cover);
+            console.log('[DEBUG] Room state filename:', JSON.stringify(data.current_file));
+            console.log('[DEBUG] Room state display filename:', JSON.stringify(data.current_file_display));
+            console.log('[DEBUG] Room state filename type:', typeof data.current_file);
+        }
+        
+        if (data.current_file) {
+            // Use display filename if available, otherwise fallback to filename
+            const displayFilename = data.current_file_display || data.current_file;
+            loadAudio(data.current_file, data.current_cover, displayFilename);
             let intendedTime = data.last_progress_s;
             if (data.is_playing) {
                 const timeSinceUpdate = (Date.now() + serverTimeOffset) / 1000 - data.last_updated_at;
@@ -960,15 +1046,81 @@ document.addEventListener('DOMContentLoaded', () => {
     // UI & Theme Helper Functions
     // =================================================================================
     
-    function loadAudio(filename, cover) {
+    function truncateFilename(filename, maxLength = 40) {
+        if (!filename || filename.length <= maxLength) {
+            return filename;
+        }
+        
+        // Reserve space for "..." (3 characters)
+        const availableLength = maxLength - 3;
+        const frontLength = Math.ceil(availableLength / 2);
+        const backLength = Math.floor(availableLength / 2);
+        
+        return filename.substring(0, frontLength) + '...' + filename.substring(filename.length - backLength);
+    }
+    
+    function setup3DTiltEffect(element) {
+        if (!element) return;
+        
+        // Add mousemove event for 3D tilt effect
+        element.addEventListener('mousemove', (e) => {
+            const rect = element.getBoundingClientRect();
+            
+            // Calculate mouse position relative to the element's center
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const centerX = element.offsetWidth / 2;
+            const centerY = element.offsetHeight / 2;
+            
+            // Calculate rotation based on cursor position to make it tilt away
+            const rotateX = (centerY - y) / 20; // Subtle tilt
+            const rotateY = (x - centerX) / 20;
+            
+            // Apply only the 3D rotation
+            element.style.transform = `rotateX(${rotateX}deg) rotateY(${rotateY}deg)`;
+        });
+        
+        // Reset the element's transformation when the mouse leaves
+        element.addEventListener('mouseleave', () => {
+            element.style.transform = 'rotateX(0) rotateY(0)';
+        });
+    }
+    
+    function loadAudio(filename, cover, displayFilename = null) {
+        console.log('[DEBUG] loadAudio called with filename:', JSON.stringify(filename));
+        console.log('[DEBUG] loadAudio called with displayFilename:', JSON.stringify(displayFilename));
+        console.log('[DEBUG] loadAudio filename type:', typeof filename);
+        console.log('[DEBUG] loadAudio displayFilename type:', typeof displayFilename);
+        
         if (!filename) {
             fileNameText.textContent = "No file selected.";
+            // Hide both cover art and placeholder when no file is selected
+            coverArt.style.display = 'none';
+            coverArt.src = '';
+            if (coverArtPlaceholder) {
+                coverArtPlaceholder.style.display = 'none';
+                coverArtPlaceholder.classList.remove('visible');
+            }
             updateFileNameAnimation();
             return;
         }
-        fileNameText.title = filename.replace(/_/g, " ");
-        fileNameText.textContent = filename.replace(/_/g, " ");
-        player.src = `/uploads/${filename}`;
+        
+        // Use display filename if provided, otherwise use the regular filename
+        let nameForDisplay = displayFilename || filename;
+        
+        console.log('[DEBUG] Name for display before processing:', JSON.stringify(nameForDisplay));
+        
+        // Don't modify the display name - use it exactly as received
+        console.log('[DEBUG] Final display name:', JSON.stringify(nameForDisplay));
+        console.log('[DEBUG] Display name contains Japanese:', /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(nameForDisplay));
+        
+        // Set the display text directly without modifications
+        let finalDisplayText = nameForDisplay.replace(/_/g, " ");
+        console.log('[DEBUG] Final display text:', JSON.stringify(finalDisplayText));
+        
+        fileNameText.title = finalDisplayText;
+        fileNameText.textContent = finalDisplayText;
+        player.src = `/uploads/${encodeURIComponent(filename)}`; // Encode for URL but keep original for display
         
         player.load();
         
@@ -979,6 +1131,12 @@ document.addEventListener('DOMContentLoaded', () => {
         updateFileNameAnimation(); // Check for overflow and apply animation if needed for new file
 
         if (cover) {
+            // Hide placeholder and show real cover art
+            if (coverArtPlaceholder) {
+                coverArtPlaceholder.classList.remove('visible');
+                coverArtPlaceholder.style.display = 'none';
+            }
+            
             coverArt.src = `/uploads/${cover}`;
             coverArt.style.display = 'block';
             coverArt.onload = () => {
@@ -990,17 +1148,36 @@ document.addEventListener('DOMContentLoaded', () => {
                     const [r, g, b] = dominantColor;
                     coverArt.style.boxShadow = `0 0 15px rgba(${r},${g},${b},0.6), 0 0 35px rgba(${r},${g},${b},0.4)`;
                     applyTheme(dominantColor, palette);
+                    
+                    // Setup 3D tilt effect for cover art
+                    setup3DTiltEffect(coverArt);
                 } catch (e) {
                     resetTheme();
+                    // Still setup tilt effect even if color extraction fails
+                    setup3DTiltEffect(coverArt);
                 }
             };
             coverArt.onerror = () => {
+                // If cover art fails to load, show placeholder instead
                 coverArt.style.display = 'none';
+                if (coverArtPlaceholder) {
+                    coverArtPlaceholder.style.display = 'block';
+                    coverArtPlaceholder.classList.add('visible');
+                    // Setup 3D tilt effect for placeholder
+                    setup3DTiltEffect(coverArtPlaceholder);
+                }
                 resetTheme();
             };
         } else {
+            // No cover art available, show placeholder
             coverArt.src = '';
             coverArt.style.display = 'none';
+            if (coverArtPlaceholder) {
+                coverArtPlaceholder.style.display = 'block';
+                coverArtPlaceholder.classList.add('visible');
+                // Setup 3D tilt effect for placeholder
+                setup3DTiltEffect(coverArtPlaceholder);
+            }
             currentDominantColor = null;
             currentColorPalette = null;
             resetTheme();
@@ -1237,6 +1414,16 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
         if (fileNameText) fileNameText.style.color = textColor;
+        
+        // Style cover art placeholder if visible
+        if (coverArtPlaceholder && coverArtPlaceholder.classList.contains('visible')) {
+            coverArtPlaceholder.style.background = `linear-gradient(135deg, 
+                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15) 0%,
+                rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.08) 50%,
+                rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.05) 100%)`;
+            coverArtPlaceholder.style.borderColor = `rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.25)`;
+            coverArtPlaceholder.style.boxShadow = `0 0 15px rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.3), 0 0 35px rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.2)`;
+        }
         
         // Apply button styles
         controlButtons.forEach(e => {
@@ -1510,6 +1697,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (fileNameText) fileNameText.style.color = '';
         
+        // Reset cover art placeholder styling
+        if (coverArtPlaceholder) {
+            coverArtPlaceholder.style.background = '';
+            coverArtPlaceholder.style.borderColor = '';
+            coverArtPlaceholder.style.boxShadow = '';
+        }
+        
         // Reset button styles
         controlButtons.forEach(e => {
             e.style.background = '';
@@ -1617,7 +1811,7 @@ document.addEventListener('DOMContentLoaded', () => {
             fileNameText.classList.add('long');
             
             const slideDistance = -(textWidth - containerWidth + 20); // Extra space for smooth transition
-            const duration = Math.max(8, Math.abs(slideDistance) / 50); // Adjust speed as needed
+            const duration = Math.max(8, Math.abs(slideDistance) / 10); // Increased divisor for faster animation
             
             fileNameText.style.setProperty('--slide-distance', `${slideDistance}px`);
             fileNameText.style.setProperty('--slide-duration', `${duration}s`);
