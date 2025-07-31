@@ -37,6 +37,7 @@
   font-family: 'Noto Sans', Arial, sans-serif;
 }
 @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&display=swap');
 
 :root {
     --primary-color: #4100b8; /* Blue 500 */
@@ -63,7 +64,7 @@
 body {
     background: linear-gradient(135deg, var(--background-color-start), var(--background-color-end));
     color: var(--text-color);
-    font-family: 'Noto Sans', sans-serif;
+    font-family: 'Noto Sans', 'Noto Sans JP', 'Hiragino Sans', 'Yu Gothic', 'Meiryo', 'MS Gothic', Arial, sans-serif;
     display: flex;
     justify-content: center;
     align-items: center;
@@ -111,9 +112,66 @@ body {
     border-radius: 16px;
     box-shadow: 0 8px 25px var(--shadow-light-color);
     object-fit: cover;
-    transition: opacity 0.4s ease, transform 0.4s ease;
+    transition: opacity 0.4s ease, transform 0.2s ease-out;
     border: 1px solid var(--surface-border-color);
-    transition: opacity 0.4s ease, transform 0.4s ease, box-shadow 0.5s ease;
+    /* Allows the element to be transformed in 3D space */
+    transform-style: preserve-3d;
+    /* Prevent dragging */
+    -webkit-user-drag: none;
+    -khtml-user-drag: none;
+    -moz-user-drag: none;
+    -o-user-drag: none;
+    user-drag: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+}
+
+/* Cover Art Placeholder for when no cover art is available */
+.cover-art-placeholder {
+    width: 220px;
+    height: 220px;
+    margin: 0 auto;
+    border-radius: 16px;
+    background: linear-gradient(135deg, 
+        rgba(255, 255, 255, 0.1) 0%,
+        rgba(255, 255, 255, 0.05) 50%,
+        rgba(255, 255, 255, 0.02) 100%);
+    border: 1px solid var(--surface-border-color);
+    box-shadow: 0 8px 25px var(--shadow-light-color);
+    display: none; /* Hidden by default */
+    position: relative;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    transition: opacity 0.4s ease, transform 0.1s ease-out;
+    /* Allows the element to be transformed in 3D space */
+    transform-style: preserve-3d;
+    /* Prevent dragging */
+    -webkit-user-drag: none;
+    -khtml-user-drag: none;
+    -moz-user-drag: none;
+    -o-user-drag: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+}
+
+.cover-art-placeholder::before {
+    content: '🎵';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 48px;
+    opacity: 0.6;
+    color: var(--text-muted-color);
+    transition: color 0.5s ease;
+}
+
+.cover-art-placeholder.visible {
+    display: block;
 }
 
 /* --- MODIFIED: Filename Container Styling --- */
@@ -129,8 +187,10 @@ body {
     flex-direction: column;
     line-height: 1.4;
     transition: color 0.3s ease;
-    overflow: visible;
+    overflow: hidden; /* Prevent container from expanding */
     position: relative;
+    width: 100%; /* Ensure container uses full available width */
+    max-width: 100%; /* Prevent container from exceeding parent */
 }
 
 /* --- NEW: Top and Bottom Line Styling --- */
@@ -165,26 +225,54 @@ body {
 .file-name-wrapper {
     display: flex;
     align-items: center;
-    justify-content: flex-start;
+    justify-content: center; /* Center by default */
     min-width: 0;
     flex: 1;
+    max-width: 100%; /* Ensure wrapper doesn't exceed container */
+    overflow: hidden; /* Hide any overflow from this wrapper */
 }
 
 #file-name-text {
     white-space: nowrap;
-    text-overflow: clip; 
-    overflow: visible;
-    flex-shrink: 0;
+    text-overflow: ellipsis; 
+    overflow: hidden;
+    flex-shrink: 1;
     min-width: 0;
+    max-width: 100%; /* Ensure it never exceeds container width */
+    padding-left: 1.5rem; /* Add space to prevent first letter from being cut off by fade edges */
     transition: color 0.5s ease; /* Smooth transition for theme changes */
+    font-family: 'Noto Sans', 'Noto Sans CJK JP', 'Hiragino Sans', 'Yu Gothic', 'Meiryo', 'MS Gothic', Arial, sans-serif;
+    font-feature-settings: "liga" 1, "kern" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
 #file-name.is-overflowing {
     justify-content: flex-start;
+    /* Remove mask during upload to show truncated text clearly */
+}
+
+#file-name.is-overflowing:not(.uploading) {
     -webkit-mask-image: linear-gradient(to right, transparent, black 8%, black 92%, transparent);
     mask-image: linear-gradient(to right, transparent, black 8%, black 92%, transparent);
 }
 
+#file-name.is-overflowing .file-name-wrapper {
+    justify-content: flex-start; /* Align to start for sliding animation */
+}
+
+
+/* Upload state styling - no animation, simple ellipsis truncation */
+#file-name.uploading #file-name-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+
+#file-name.uploading #file-name-text.long {
+    animation: none; /* Disable sliding animation during upload */
+}
 
 /* --- MODIFIED: Main logic for playing state --- */
 #file-name.playing {
@@ -645,6 +733,8 @@ audio#player {
     align-items: center;
     width: 100%;
     padding: 0 50px; /* Add padding to ensure bars stay inside container */
+    /* Establishes the 3D perspective for child elements */
+    perspective: 1200px;
 }
 
 .cover-dancing-bars {
