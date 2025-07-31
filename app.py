@@ -35,6 +35,7 @@ ALLOWED_EXTENSIONS = {'mp3', 'wav', 'ogg', 'flac', 'm4a'}
 app = Flask(__name__, static_url_path='/static')
 app.config['SECRET_KEY'] = 'secret!'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['JSON_AS_ASCII'] = False  # Ensure Unicode characters are not escaped in JSON responses
 
 redis_url = os.environ.get('REDIS_URL')
 socketio = SocketIO(
@@ -137,8 +138,17 @@ def extract_cover_art(file_path):
 
 @app.route('/uploads/<path:filename>')
 def serve_file(filename):
-    """Serve uploaded files."""
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+    """Serve uploaded files with proper Unicode handling."""
+    print(f"[DEBUG] Serving file: {repr(filename)}")
+    # Ensure filename is properly decoded
+    try:
+        import urllib.parse
+        decoded_filename = urllib.parse.unquote(filename)
+        print(f"[DEBUG] Decoded filename: {repr(decoded_filename)}")
+        return send_from_directory(app.config['UPLOAD_FOLDER'], decoded_filename)
+    except Exception as e:
+        print(f"[DEBUG] Fallback to original filename due to error: {e}")
+        return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 
 @app.route('/upload', methods=['POST'])
@@ -164,14 +174,44 @@ def upload():
 
     try:
         from werkzeug.utils import secure_filename
+        import re
         # Ensure filename is not None before processing
         original_filename = file.filename
         if not original_filename:
             return jsonify({'success': False, 'error': 'Invalid filename'}), 400
-            
-        filename = secure_filename(original_filename)
-        if not filename:  # secure_filename might return empty string for invalid names
+        
+        print(f"[DEBUG] Original filename: {repr(original_filename)}")
+        print(f"[DEBUG] Original filename type: {type(original_filename)}")
+        print(f"[DEBUG] Original filename length: {len(original_filename) if original_filename else 'None'}")
+        
+        # Test Unicode characters in original filename
+        if original_filename:
+            japanese_chars = [c for c in original_filename if ord(c) > 127]
+            print(f"[DEBUG] Non-ASCII characters in original: {repr(japanese_chars)}")
+        
+        # Use a custom secure filename function that preserves Unicode characters
+        def unicode_secure_filename(filename):
+            # Remove path separators and other dangerous characters but keep Unicode
+            print(f"[DEBUG] unicode_secure_filename input: {repr(filename)}")
+            filename = re.sub(r'[/\\]', '', filename)  # Remove path separators
+            filename = re.sub(r'[<>:"|?*]', '', filename)  # Remove Windows forbidden chars
+            filename = filename.strip()  # Remove leading/trailing whitespace
+            filename = re.sub(r'\s+', ' ', filename)  # Normalize whitespace
+            print(f"[DEBUG] unicode_secure_filename output: {repr(filename)}")
+            return filename if filename else None
+        
+        filename = unicode_secure_filename(original_filename)
+        print(f"[DEBUG] Unicode secure filename: {repr(filename)}")
+        print(f"[DEBUG] Unicode secure filename type: {type(filename)}")
+        
+        # Test Unicode preservation
+        if filename:
+            japanese_chars = [c for c in filename if ord(c) > 127]
+            print(f"[DEBUG] Non-ASCII characters preserved: {repr(japanese_chars)}")
+        
+        if not filename:  # If filename is still empty, generate a random one
             filename = f"audio_{uuid.uuid4().hex[:8]}.mp3"
+            print(f"[DEBUG] Generated fallback filename: {filename}")
             
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         
@@ -213,16 +253,32 @@ def upload():
         with thread_lock:
             rooms_data[room].update({
                 'current_file': filename,
+                'current_file_display': original_filename,  # Store original for display
                 'current_cover': final_cover_filename,
                 'is_playing': False,
                 'last_progress_s': 0,
                 'last_updated_at': time.time(),
             })
+            
+        print(f"[DEBUG] Filename stored in rooms_data: {repr(filename)}")
+        print(f"[DEBUG] Display filename stored: {repr(original_filename)}")
+        print(f"[DEBUG] Filename type: {type(filename)}")
 
-        socketio.emit('new_file', {'filename': filename, 'cover': final_cover_filename}, to=room)
+        # Send both filenames to client
+        emit_data = {
+            'filename': filename, 
+            'filename_display': original_filename,
+            'cover': final_cover_filename
+        }
+        print(f"[DEBUG] About to emit new_file with data: {repr(emit_data)}")
+        print(f"[DEBUG] filename_display in emit_data: {repr(emit_data['filename_display'])}")
+        print(f"[DEBUG] filename_display is Unicode: {isinstance(emit_data['filename_display'], str)}")
+        
+        socketio.emit('new_file', emit_data, to=room)
         socketio.emit('pause', {'time': 0}, to=room)
         
-        return jsonify({'success': True, 'filename': filename})
+        print(f"[DEBUG] Filename being sent in JSON response: {repr(filename)}")
+        return jsonify({'success': True, 'filename': filename, 'filename_display': original_filename})
 
     except Exception as e:
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
@@ -255,6 +311,7 @@ def create_room():
     room_id = str(uuid.uuid4())[:6]
     rooms_data[room_id] = {
         'current_file': None,
+        'current_file_display': None,  # Store original filename for display
         'current_cover': None,
         'is_playing': False,
         'last_progress_s': 0,
@@ -300,6 +357,9 @@ def on_join(data):
             if room_state['is_playing']:
                 time_since_update = time.time() - room_state['last_updated_at']
                 room_state['last_progress_s'] += time_since_update
+            
+            print(f"[DEBUG] Sending room_state with filename: {repr(room_state.get('current_file'))}")
+            print(f"[DEBUG] Sending room_state with display filename: {repr(room_state.get('current_file_display'))}")
             emit('room_state', room_state)
             
             # Broadcast member count update to all clients in the room
@@ -334,6 +394,7 @@ def on_disconnect():
                          # Reset room state but keep the room for potential rejoins
                          rooms_data[room_id]['is_playing'] = False
                          rooms_data[room_id]['current_file'] = None
+                         rooms_data[room_id]['current_file_display'] = None
                          rooms_data[room_id]['current_cover'] = None
 
 @socketio.on('client_ping')
