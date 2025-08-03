@@ -251,31 +251,50 @@ def upload():
         print(f"[DEBUG] Emitting new_file event with cover: {final_cover_filename}")
             
         with thread_lock:
-            rooms_data[room].update({
-                'current_file': filename,
-                'current_file_display': original_filename,  # Store original for display
-                'current_cover': final_cover_filename,
-                'is_playing': False,
-                'last_progress_s': 0,
-                'last_updated_at': time.time(),
-            })
+            # Create audio item for queue
+            audio_item = {
+                'filename': filename,
+                'filename_display': original_filename,
+                'cover': final_cover_filename,
+                'upload_time': time.time()
+            }
             
-        print(f"[DEBUG] Filename stored in rooms_data: {repr(filename)}")
-        print(f"[DEBUG] Display filename stored: {repr(original_filename)}")
-        print(f"[DEBUG] Filename type: {type(filename)}")
-
-        # Send both filenames to client
-        emit_data = {
-            'filename': filename, 
-            'filename_display': original_filename,
-            'cover': final_cover_filename
-        }
-        print(f"[DEBUG] About to emit new_file with data: {repr(emit_data)}")
-        print(f"[DEBUG] filename_display in emit_data: {repr(emit_data['filename_display'])}")
-        print(f"[DEBUG] filename_display is Unicode: {isinstance(emit_data['filename_display'], str)}")
-        
-        socketio.emit('new_file', emit_data, to=room)
-        socketio.emit('pause', {'time': 0}, to=room)
+            # Initialize queue if it doesn't exist
+            if 'queue' not in rooms_data[room]:
+                rooms_data[room]['queue'] = []
+            if 'current_index' not in rooms_data[room]:
+                rooms_data[room]['current_index'] = -1
+            
+            # Add to queue
+            rooms_data[room]['queue'].append(audio_item)
+            
+            # If no song is currently loaded, set this as current
+            if rooms_data[room]['current_file'] is None:
+                rooms_data[room]['current_index'] = len(rooms_data[room]['queue']) - 1
+                rooms_data[room].update({
+                    'current_file': filename,
+                    'current_file_display': original_filename,
+                    'current_cover': final_cover_filename,
+                    'is_playing': False,
+                    'last_progress_s': 0,
+                    'last_updated_at': time.time(),
+                })
+                
+                # Send both filenames to client for the new current song
+                emit_data = {
+                    'filename': filename, 
+                    'filename_display': original_filename,
+                    'cover': final_cover_filename
+                }
+                print(f"[DEBUG] About to emit new_file with data: {repr(emit_data)}")
+                socketio.emit('new_file', emit_data, to=room)
+                socketio.emit('pause', {'time': 0}, to=room)
+            
+            # Always emit queue update
+            socketio.emit('queue_update', {
+                'queue': rooms_data[room]['queue'],
+                'current_index': rooms_data[room]['current_index']
+            }, to=room)
         
         print(f"[DEBUG] Filename being sent in JSON response: {repr(filename)}")
         return jsonify({'success': True, 'filename': filename, 'filename_display': original_filename})
@@ -300,6 +319,134 @@ def get_current_song():
             return jsonify(rooms_data[room])
     return jsonify({'filename': None, 'cover': None})
 
+@app.route('/queue/<string:room_id>')
+def get_queue(room_id):
+    """Get the current queue for a room."""
+    if room_id not in rooms_data:
+        return jsonify({'error': 'Room not found'}), 404
+    
+    with thread_lock:
+        queue_data = {
+            'queue': rooms_data[room_id].get('queue', []),
+            'current_index': rooms_data[room_id].get('current_index', -1)
+        }
+    return jsonify(queue_data)
+
+@app.route('/queue/<string:room_id>/play/<int:index>', methods=['POST'])
+def play_from_queue(room_id, index):
+    """Play a specific song from the queue."""
+    if room_id not in rooms_data:
+        return jsonify({'error': 'Room not found'}), 404
+    
+    with thread_lock:
+        queue = rooms_data[room_id].get('queue', [])
+        if index < 0 or index >= len(queue):
+            return jsonify({'error': 'Invalid queue index'}), 400
+        
+        # Update current song
+        audio_item = queue[index]
+        rooms_data[room_id].update({
+            'current_file': audio_item['filename'],
+            'current_file_display': audio_item['filename_display'],
+            'current_cover': audio_item['cover'],
+            'current_index': index,
+            'is_playing': False,
+            'last_progress_s': 0,
+            'last_updated_at': time.time(),
+        })
+    
+    # Emit new song to all clients
+    emit_data = {
+        'filename': audio_item['filename'],
+        'filename_display': audio_item['filename_display'],
+        'cover': audio_item['cover']
+    }
+    socketio.emit('new_file', emit_data, to=room_id)
+    socketio.emit('pause', {'time': 0}, to=room_id)
+    
+    # Update queue status
+    socketio.emit('queue_update', {
+        'queue': queue,
+        'current_index': index
+    }, to=room_id)
+    
+    return jsonify({'success': True})
+
+@app.route('/queue/<string:room_id>/remove/<int:index>', methods=['DELETE'])
+def remove_from_queue(room_id, index):
+    """Remove a song from the queue."""
+    if room_id not in rooms_data:
+        return jsonify({'error': 'Room not found'}), 404
+    
+    with thread_lock:
+        queue = rooms_data[room_id].get('queue', [])
+        current_index = rooms_data[room_id].get('current_index', -1)
+        
+        if index < 0 or index >= len(queue):
+            return jsonify({'error': 'Invalid queue index'}), 400
+        
+        # Remove from queue
+        queue.pop(index)
+        
+        # Adjust current_index if necessary
+        if index == current_index:
+            # If we're removing the currently playing song
+            if len(queue) == 0:
+                # Queue is now empty
+                rooms_data[room_id].update({
+                    'current_file': None,
+                    'current_file_display': None,
+                    'current_cover': None,
+                    'current_index': -1,
+                    'is_playing': False,
+                    'last_progress_s': 0,
+                })
+                socketio.emit('new_file', {'filename': None, 'filename_display': None, 'cover': None}, to=room_id)
+            elif index < len(queue):
+                # Play the next song (which is now at the same index)
+                audio_item = queue[index]
+                rooms_data[room_id].update({
+                    'current_file': audio_item['filename'],
+                    'current_file_display': audio_item['filename_display'],
+                    'current_cover': audio_item['cover'],
+                    'current_index': index,
+                    'is_playing': False,
+                    'last_progress_s': 0,
+                })
+                socketio.emit('new_file', {
+                    'filename': audio_item['filename'],
+                    'filename_display': audio_item['filename_display'],
+                    'cover': audio_item['cover']
+                }, to=room_id)
+            else:
+                # Play the previous song (index decreased by 1)
+                new_index = index - 1
+                audio_item = queue[new_index]
+                rooms_data[room_id].update({
+                    'current_file': audio_item['filename'],
+                    'current_file_display': audio_item['filename_display'],
+                    'current_cover': audio_item['cover'],
+                    'current_index': new_index,
+                    'is_playing': False,
+                    'last_progress_s': 0,
+                })
+                socketio.emit('new_file', {
+                    'filename': audio_item['filename'],
+                    'filename_display': audio_item['filename_display'],
+                    'cover': audio_item['cover']
+                }, to=room_id)
+        elif index < current_index:
+            # Adjust current_index down by 1
+            rooms_data[room_id]['current_index'] = current_index - 1
+    
+    # Update queue status
+    socketio.emit('queue_update', {
+        'queue': rooms_data[room_id]['queue'],
+        'current_index': rooms_data[room_id]['current_index']
+    }, to=room_id)
+    
+    return jsonify({'success': True})
+
 @app.route('/')
 def home():
     """Serve the page for creating or joining a room."""
@@ -316,7 +463,9 @@ def create_room():
         'is_playing': False,
         'last_progress_s': 0,
         'last_updated_at': time.time(),
-        'members': 0  # Initialize member count
+        'members': 0,  # Initialize member count
+        'queue': [],  # Initialize queue for multiple audio files
+        'current_index': -1  # Index of currently playing song in queue
     }
     print(f"New room created: {room_id}")
     return redirect(url_for('player_room', room_id=room_id))
@@ -362,6 +511,12 @@ def on_join(data):
             print(f"[DEBUG] Sending room_state with display filename: {repr(room_state.get('current_file_display'))}")
             emit('room_state', room_state)
             
+            # Send queue data to the joining client
+            emit('queue_update', {
+                'queue': rooms_data[room].get('queue', []),
+                'current_index': rooms_data[room].get('current_index', -1)
+            })
+            
             # Broadcast member count update to all clients in the room
             socketio.emit('member_count_update', {
                 'count': member_count}, to=room)
@@ -396,6 +551,9 @@ def on_disconnect():
                          rooms_data[room_id]['current_file'] = None
                          rooms_data[room_id]['current_file_display'] = None
                          rooms_data[room_id]['current_cover'] = None
+                         # Clear the queue when room is empty
+                         rooms_data[room_id]['queue'] = []
+                         rooms_data[room_id]['current_index'] = -1
 
 @socketio.on('client_ping')
 def handle_client_ping():
@@ -461,6 +619,108 @@ def handle_sync(data):
             'audio_time': data.get('time', 0),
             'target_timestamp': target_timestamp
         }, to=room)
+
+@socketio.on('next_song')
+def handle_next_song(data):
+    """Play the next song in the queue."""
+    room = data.get('room')
+    auto_play = data.get('auto_play', False)  # Check if this is auto-triggered
+    
+    if room not in rooms_data:
+        return
+        
+    with thread_lock:
+        queue = rooms_data[room].get('queue', [])
+        current_index = rooms_data[room].get('current_index', -1)
+        
+        if len(queue) == 0:
+            return
+            
+        next_index = current_index + 1
+        if next_index >= len(queue):
+            next_index = 0  # Loop back to start
+            
+        # Update current song
+        audio_item = queue[next_index]
+        rooms_data[room].update({
+            'current_file': audio_item['filename'],
+            'current_file_display': audio_item['filename_display'],
+            'current_cover': audio_item['cover'],
+            'current_index': next_index,
+            'is_playing': auto_play,  # Set playing state based on auto_play
+            'last_progress_s': 0,
+            'last_updated_at': time.time(),
+        })
+    
+    # Emit new song to all clients
+    emit_data = {
+        'filename': audio_item['filename'],
+        'filename_display': audio_item['filename_display'],
+        'cover': audio_item['cover']
+    }
+    socketio.emit('new_file', emit_data, to=room)
+    
+    if auto_play:
+        # If auto-playing, start playback immediately
+        target_timestamp = time.time() + 0.5  # 500ms buffer for loading
+        socketio.emit('scheduled_play', {
+            'audio_time': 0,
+            'target_timestamp': target_timestamp
+        }, to=room)
+    else:
+        # If manually triggered, just pause at beginning
+        socketio.emit('pause', {'time': 0}, to=room)
+    
+    # Update queue status
+    socketio.emit('queue_update', {
+        'queue': queue,
+        'current_index': next_index
+    }, to=room)
+
+@socketio.on('previous_song')
+def handle_previous_song(data):
+    """Play the previous song in the queue."""
+    room = data.get('room')
+    if room not in rooms_data:
+        return
+        
+    with thread_lock:
+        queue = rooms_data[room].get('queue', [])
+        current_index = rooms_data[room].get('current_index', -1)
+        
+        if len(queue) == 0:
+            return
+            
+        prev_index = current_index - 1
+        if prev_index < 0:
+            prev_index = len(queue) - 1  # Loop back to end
+            
+        # Update current song
+        audio_item = queue[prev_index]
+        rooms_data[room].update({
+            'current_file': audio_item['filename'],
+            'current_file_display': audio_item['filename_display'],
+            'current_cover': audio_item['cover'],
+            'current_index': prev_index,
+            'is_playing': False,
+            'last_progress_s': 0,
+            'last_updated_at': time.time(),
+        })
+    
+    # Emit new song to all clients
+    emit_data = {
+        'filename': audio_item['filename'],
+        'filename_display': audio_item['filename_display'],
+        'cover': audio_item['cover']
+    }
+    socketio.emit('new_file', emit_data, to=room)
+    socketio.emit('pause', {'time': 0}, to=room)
+    
+    # Update queue status
+    socketio.emit('queue_update', {
+        'queue': queue,
+        'current_index': prev_index
+    }, to=room)
 
 
 # =================================================================================
