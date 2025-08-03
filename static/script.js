@@ -6,6 +6,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const audioInput = document.getElementById('audio-input');
     const uploadBtn = document.getElementById('upload-btn');
     const syncBtn = document.getElementById('sync-btn');
+    const queueBtn = document.getElementById('queue-btn');
+    const queueCount = document.getElementById('queue-count');
+    const queueModal = document.getElementById('queue-modal');
+    const closeQueueBtn = document.getElementById('close-queue');
+    const queueList = document.getElementById('queue-list');
     const fileNameDisplay = document.getElementById('file-name');
     const fileNameText = document.getElementById('file-name-text');
     const coverArt = document.getElementById('cover-art');
@@ -17,6 +22,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Custom Player Elements ---
     const playPauseBtn = document.getElementById('play-pause-btn');
     const playPauseIcon = document.getElementById('play-pause-icon');
+    const prevBtn = document.getElementById('prev-btn');
+    const nextBtn = document.getElementById('next-btn');
     const currentTimeDisplay = document.getElementById('current-time');
     const totalTimeDisplay = document.getElementById('total-time');
     const progressBar = document.querySelector('.progress-bar');
@@ -43,6 +50,10 @@ document.addEventListener('DOMContentLoaded', () => {
     let lastVolume = 0.7; // Remember last volume for mute/unmute
 
     let serverTimeOffset = 0;
+
+    // --- Queue State ---
+    let currentQueue = [];
+    let currentQueueIndex = -1;
 
     const MAX_ALLOWED_DRIFT_S = 0.5;
     const PLAYBACK_RATE_ADJUST = 0.05;
@@ -207,9 +218,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const rightMid = rightDataArray[15];   // Mid freq
         const rightTreble = rightDataArray[25]; // High freq (treble)
 
-        const normalize = (value, max = 255, silenceThreshold = 10, maxHeight = 180) => {
+        // Dynamic max height based on fullscreen mode
+        const isFullscreen = document.body.classList.contains('fullscreen-mode');
+        const maxHeight = isFullscreen ? 280 : 180; // Taller bars in fullscreen
+
+        const normalize = (value, max = 255, silenceThreshold = 10) => {
             if (value < silenceThreshold) return '0px';  // Fully collapse if quiet
-            return `${(value / max) * maxHeight}px`;     // Scale height normally
+            return `${(value / max) * maxHeight}px`;     // Scale height with dynamic maxHeight
         };
 
         // Update left bars with left channel data (treble, mid, bass)
@@ -847,6 +862,47 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Queue button event listener
+    if (queueBtn) {
+        queueBtn.addEventListener('click', () => {
+            if (queueModal) {
+                queueModal.style.display = 'flex';
+                updateQueueDisplay();
+            }
+        });
+    }
+
+    // Close queue modal
+    if (closeQueueBtn) {
+        closeQueueBtn.addEventListener('click', () => {
+            if (queueModal) {
+                queueModal.style.display = 'none';
+            }
+        });
+    }
+
+    // Close queue modal on backdrop click
+    if (queueModal) {
+        queueModal.addEventListener('click', (e) => {
+            if (e.target === queueModal) {
+                queueModal.style.display = 'none';
+            }
+        });
+    }
+
+    // Next/Previous song buttons
+    if (nextBtn) {
+        nextBtn.addEventListener('click', () => {
+            nextSong();
+        });
+    }
+
+    if (prevBtn) {
+        prevBtn.addEventListener('click', () => {
+            previousSong();
+        });
+    }
+
     player.addEventListener('play', () => {
         if (isReceivingUpdate) return;
         fileNameDisplay.classList.add('playing');
@@ -867,6 +923,21 @@ document.addEventListener('DOMContentLoaded', () => {
         hideCoverDancingBars();
         updateFileNameAnimation(); // Recalculate for paused state
         socket.emit('pause', { room: roomId });
+    });
+
+    player.addEventListener('ended', () => {
+        console.log('Song ended, attempting to play next song automatically');
+        fileNameDisplay.classList.remove('playing');
+        hideCoverDancingBars();
+        updateFileNameAnimation(); // Recalculate for paused state
+        
+        // Automatically play next song if there are multiple songs in queue
+        if (currentQueue.length > 1) {
+            console.log('Auto-playing next song from queue');
+            socket.emit('next_song', { room: roomId, auto_play: true });
+        } else {
+            console.log('No more songs in queue, staying on current song');
+        }
     });
 
     player.addEventListener('seeking', () => {
@@ -924,6 +995,10 @@ document.addEventListener('DOMContentLoaded', () => {
         syncClock();
         if (pingInterval) clearInterval(pingInterval);
         pingInterval = setInterval(syncClock, 15000);
+        
+        // Initialize queue display
+        updateQueueCount();
+        updateNextPrevButtons();
     });
 
     socket.on('scheduled_play', (data) => {
@@ -1018,6 +1093,15 @@ document.addEventListener('DOMContentLoaded', () => {
         updateMemberCount(data.count);
     });
 
+    socket.on('queue_update', (data) => {
+        console.log('[DEBUG] Received queue_update:', data);
+        currentQueue = data.queue || [];
+        currentQueueIndex = data.current_index || -1;
+        updateQueueDisplay();
+        updateQueueCount();
+        updateNextPrevButtons();
+    });
+
     socket.on('server_sync', (data) => {
         if (userHasJustSeeked || player.paused || isReceivingUpdate || player.seeking) {
             return;
@@ -1072,9 +1156,23 @@ document.addEventListener('DOMContentLoaded', () => {
             const centerX = element.offsetWidth / 2;
             const centerY = element.offsetHeight / 2;
             
+            // Calculate tilt intensity based on element size and fullscreen mode
+            const isFullscreen = document.body.classList.contains('fullscreen-mode');
+            const elementSize = Math.min(element.offsetWidth, element.offsetHeight);
+            
+            // Base divisor for tilt calculation
+            let tiltDivisor;
+            if (isFullscreen) {
+                // In fullscreen, use higher divisor for subtler effect on larger elements
+                tiltDivisor = Math.max(30, elementSize / 11); // More subtle for larger elements
+            } else {
+                // Normal mode - standard tilt
+                tiltDivisor = 20;
+            }
+            
             // Calculate rotation based on cursor position to make it tilt away
-            const rotateX = (centerY - y) / 20; // Subtle tilt
-            const rotateY = (x - centerX) / 20;
+            const rotateX = (centerY - y) / tiltDivisor; // Responsive tilt
+            const rotateY = (x - centerX) / tiltDivisor;
             
             // Apply only the 3D rotation
             element.style.transform = `rotateX(${rotateX}deg) rotateY(${rotateY}deg)`;
@@ -1102,6 +1200,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 coverArtPlaceholder.classList.remove('visible');
             }
             updateFileNameAnimation();
+            // Hide fullscreen button if no audio
+            if (fullscreenBtn) fullscreenBtn.style.setProperty('display', 'none', 'important');
             return;
         }
         
@@ -1120,16 +1220,16 @@ document.addEventListener('DOMContentLoaded', () => {
         
         fileNameText.title = finalDisplayText;
         fileNameText.textContent = finalDisplayText;
-        player.src = `/uploads/${encodeURIComponent(filename)}`; // Encode for URL but keep original for display
-        
+        player.src = `/uploads/${encodeURIComponent(filename)}`;
         player.load();
-        
         fileNameDisplay.classList.remove('playing');
         coverArt.style.boxShadow = 'none';
         hideCoverDancingBars();
         resetTheme();
-        updateFileNameAnimation(); // Check for overflow and apply animation if needed for new file
-
+        updateFileNameAnimation();
+        // Show fullscreen button when audio is loaded
+        if (fullscreenBtn) fullscreenBtn.style.setProperty('display', 'flex', 'important');
+        
         if (cover) {
             // Hide placeholder and show real cover art
             if (coverArtPlaceholder) {
@@ -1498,6 +1598,41 @@ document.addEventListener('DOMContentLoaded', () => {
                 inset 0 -1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.08)`;
         }
 
+        // Apply to exit room button (same logic as create new room button)
+        const exitRoomBtn = document.querySelector('.exit-room-button');
+        if (exitRoomBtn) {
+            exitRoomBtn.style.background = `linear-gradient(135deg, 
+                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15) 0%,
+                rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.08) 50%,
+                rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.05) 100%)`;
+            exitRoomBtn.style.borderColor = `rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.25)`;
+            
+            // Enhanced contrast logic for exit room button text (same as create room button)
+            const avgBackgroundBrightness = (getBrightness(shades.light.r, shades.light.g, shades.light.b) + 
+                                           getBrightness(shades.normal.r, shades.normal.g, shades.normal.b) + 
+                                           getBrightness(shades.dark.r, shades.dark.g, shades.dark.b)) / 3;
+            
+            if (avgBackgroundBrightness > 140) {
+                exitRoomBtn.style.color = 'black';
+            } else if (avgBackgroundBrightness < 115) {
+                exitRoomBtn.style.color = 'white';
+            } else {
+                const lightContrast = Math.abs(avgBackgroundBrightness - getBrightness(shades.light.r, shades.light.g, shades.light.b));
+                const darkContrast = Math.abs(avgBackgroundBrightness - getBrightness(shades.dark.r, shades.dark.g, shades.dark.b));
+                
+                if (lightContrast > darkContrast) {
+                    exitRoomBtn.style.color = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
+                } else {
+                    exitRoomBtn.style.color = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
+                }
+            }
+            
+            exitRoomBtn.style.boxShadow = `
+                0 8px 32px 0 rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.3),
+                inset 0 1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15),
+                inset 0 -1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.08)`;
+        }
+
         // Apply custom player styling
         const customPlayer = document.querySelector('.custom-player');
         if (customPlayer) {
@@ -1723,6 +1858,16 @@ document.addEventListener('DOMContentLoaded', () => {
             createRoomBtn.style.textShadow = '';
         }
 
+        // Reset exit room button
+        const exitRoomBtn = document.querySelector('.exit-room-button');
+        if (exitRoomBtn) {
+            exitRoomBtn.style.background = '';
+            exitRoomBtn.style.color = '';
+            exitRoomBtn.style.borderColor = '';
+            exitRoomBtn.style.boxShadow = '';
+            exitRoomBtn.style.textShadow = '';
+        }
+
         // Reset custom player styling
         const customPlayer = document.querySelector('.custom-player');
         if (customPlayer) {
@@ -1791,6 +1936,136 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // ===============================
+    // Queue Management Functions
+    // ===============================
+    function updateQueueCount() {
+        if (queueCount) {
+            queueCount.textContent = currentQueue.length;
+        }
+    }
+
+    function updateQueueDisplay() {
+        if (!queueList) return;
+
+        if (currentQueue.length === 0) {
+            queueList.innerHTML = '<p class="empty-queue">No songs in queue</p>';
+            return;
+        }
+
+        const queueHTML = currentQueue.map((item, index) => {
+            const isCurrentSong = index === currentQueueIndex;
+            const coverSrc = item.cover ? `/uploads/${item.cover}` : '';
+            const coverDisplay = item.cover 
+                ? `<img src="${coverSrc}" alt="Cover" class="queue-item-cover">` 
+                : '<div class="queue-item-cover">🎵</div>';
+            
+            return `
+                <div class="queue-item ${isCurrentSong ? 'current' : ''}" data-index="${index}">
+                    ${coverDisplay}
+                    <div class="queue-item-info">
+                        <div class="queue-item-title">${item.filename_display || item.filename}</div>
+                        <div class="queue-item-status">${isCurrentSong ? 'Now Playing' : `#${index + 1} in queue`}</div>
+                    </div>
+                    <div class="queue-item-actions">
+                        <button class="queue-item-btn play-btn" data-index="${index}" title="Play">
+                            <i class="fas fa-play"></i>
+                        </button>
+                        <button class="queue-item-btn remove-btn danger" data-index="${index}" title="Remove">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        queueList.innerHTML = queueHTML;
+
+        // Add event listeners to queue item buttons
+        queueList.querySelectorAll('.play-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const index = parseInt(btn.dataset.index);
+                playFromQueue(index);
+            });
+        });
+
+        queueList.querySelectorAll('.remove-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const index = parseInt(btn.dataset.index);
+                removeFromQueue(index);
+            });
+        });
+
+        // Add click listeners to queue items themselves
+        queueList.querySelectorAll('.queue-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const index = parseInt(item.dataset.index);
+                playFromQueue(index);
+            });
+        });
+    }
+
+    function updateNextPrevButtons() {
+        if (prevBtn) {
+            prevBtn.disabled = currentQueue.length <= 1;
+            prevBtn.style.opacity = currentQueue.length <= 1 ? '0.5' : '1';
+        }
+        if (nextBtn) {
+            nextBtn.disabled = currentQueue.length <= 1;
+            nextBtn.style.opacity = currentQueue.length <= 1 ? '0.5' : '1';
+        }
+    }
+
+    function playFromQueue(index) {
+        if (index < 0 || index >= currentQueue.length) return;
+        
+        fetch(`/queue/${roomId}/play/${index}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (!data.success) {
+                console.error('Failed to play from queue:', data.error);
+            }
+        })
+        .catch(error => {
+            console.error('Error playing from queue:', error);
+        });
+    }
+
+    function removeFromQueue(index) {
+        if (index < 0 || index >= currentQueue.length) return;
+        
+        fetch(`/queue/${roomId}/remove/${index}`, {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (!data.success) {
+                console.error('Failed to remove from queue:', data.error);
+            }
+        })
+        .catch(error => {
+            console.error('Error removing from queue:', error);
+        });
+    }
+
+    function nextSong() {
+        socket.emit('next_song', { room: roomId, auto_play: false });
+    }
+
+    function previousSong() {
+        socket.emit('previous_song', { room: roomId });
+    }
+
     function updateFileNameAnimation() {
         if (!fileNameText || !fileNameDisplay) return;
         
@@ -1817,4 +2092,36 @@ document.addEventListener('DOMContentLoaded', () => {
             fileNameText.style.setProperty('--slide-duration', `${duration}s`);
         }
     }
+
+    // ===============================
+// Fullscreen Toggle Button Logic
+// ===============================
+function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().then(() => {
+            // Add fullscreen mode class when entering fullscreen
+            document.body.classList.add('fullscreen-mode');
+        });
+    } else {
+        if (document.exitFullscreen) {
+            document.exitFullscreen().then(() => {
+                // Remove fullscreen mode class when exiting fullscreen
+                document.body.classList.remove('fullscreen-mode');
+            });
+        }
+    }
+}
+
+// Listen for fullscreen changes to handle ESC key or other exits
+document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement) {
+        // Exited fullscreen, remove the mode class
+        document.body.classList.remove('fullscreen-mode');
+    }
+});
+
+const fullscreenBtn = document.getElementById('fullscreen-btn');
+if (fullscreenBtn) {
+    fullscreenBtn.addEventListener('click', toggleFullscreen);
+}
 });
