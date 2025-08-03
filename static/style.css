@@ -1,3 +1,457 @@
+/* Exit Room Button - matches create-new-room-button style but icon is black */
+.exit-room-button {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: linear-gradient(135deg, 
+        rgba(255, 255, 255, 0.1) 0%,
+        rgba(255, 255, 255, 0.05) 50%,
+        rgba(255, 255, 255, 0.02) 100%);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    box-shadow: 
+        0 8px 32px 0 rgba(31, 38, 135, 0.37),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.1),
+        inset 0 -1px 0 0 rgba(255, 255, 255, 0.05);
+    color: white;
+    font-size: 18px;
+    font-weight: bold;
+    text-decoration: none;
+    line-height: 32px;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.exit-room-button::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(135deg, 
+        rgba(255, 255, 255, 0.08) 0%,
+        transparent 50%,
+        rgba(255, 255, 255, 0.03) 100%);
+    border-radius: 50%;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+.exit-room-button:hover {
+    border-color: rgba(255, 255, 255, 0.25);
+    box-shadow: 
+        0 12px 40px 0 rgba(31, 38, 135, 0.45),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.15),
+        inset 0 -1px 0 0 rgba(255, 255, 255, 0.08);
+    transform: scale(1.05) translateY(-1px);
+}
+.exit-room-button:hover::before {
+    opacity: 1;
+}
+.exit-room-button:active {
+    transform: scale(1) translateY(0px);
+    box-shadow: 
+        0 6px 24px 0 rgba(31, 38, 135, 0.4),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.12),
+        inset 0 -1px 0 0 rgba(255, 255, 255, 0.06);
+}
+
+/* Fullscreen Button Styles */
+.fullscreen-btn {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    color: rgba(255, 255, 255, 0.9);
+    cursor: pointer;
+    z-index: 100;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    opacity: 0;
+    transform: scale(0.8);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.fullscreen-btn:hover {
+    background: rgba(0, 0, 0, 0.6);
+    color: white;
+    transform: scale(1);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.fullscreen-btn:active {
+    transform: scale(0.95);
+}
+
+/* Show fullscreen button on container hover */
+.container:hover .fullscreen-btn {
+    opacity: 1;
+    transform: scale(1);
+}
+
+/* Fullscreen Mode Styles */
+body.fullscreen-mode {
+    background: linear-gradient(135deg, var(--background-color-start), var(--background-color-end));
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+}
+
+body.fullscreen-mode .container {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    max-width: 100vw;
+    width: 100vw;
+    height: 100vh;
+    padding: 2rem;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: center;
+}
+
+body.fullscreen-mode .cover-section {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    max-width: 600px;
+    padding: 0;
+}
+
+body.fullscreen-mode #cover-art {
+    width: min(60vh, 500px);
+    height: min(60vh, 500px);
+    border-radius: 20px;
+}
+
+body.fullscreen-mode .cover-art-placeholder {
+    width: min(60vh, 500px);
+    height: min(60vh, 500px);
+    border-radius: 20px;
+}
+
+body.fullscreen-mode .cover-art-placeholder::before {
+    font-size: 80px;
+}
+
+body.fullscreen-mode .custom-player {
+    position: fixed;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 90%;
+    max-width: 600px;
+    z-index: 50;
+}
+
+body.fullscreen-mode .upload-wrapper,
+body.fullscreen-mode .sync-wrapper {
+    display: none;
+}
+
+body.fullscreen-mode .controls-section {
+    display: none;
+}
+
+body.fullscreen-mode #file-name {
+    position: fixed;
+    top: 20%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 90%;
+    max-width: 600px;
+    font-size: 1.2rem;
+    z-index: 40;
+}
+
+/* Dancing bars adjustments for fullscreen */
+body.fullscreen-mode .cover-dancing-bars {
+    gap: 6px; /* Increase gap between bars */
+}
+
+body.fullscreen-mode .cover-dancing-bars .bar {
+    width: 6px; /* Make bars thicker */
+    border-radius: 3px; /* Adjust border radius for thicker bars */
+}
+
+body.fullscreen-mode .cover-dancing-bars.left {
+    left: calc(50% - min(30vh, 250px) - 20px - 30px); /* Adjust for larger bars and gap */
+}
+
+body.fullscreen-mode .cover-dancing-bars.right {
+    right: calc(50% - min(30vh, 250px) - 20px - 30px); /* Adjust for larger bars and gap */
+}
+
+/* Mobile responsive adjustments for fullscreen mode */
+@media (max-width: 600px) {
+    body.fullscreen-mode #cover-art {
+        width: min(50vh, 300px);
+        height: min(50vh, 300px);
+        border-radius: 16px;
+    }
+
+    body.fullscreen-mode .cover-art-placeholder {
+        width: min(50vh, 300px);
+        height: min(50vh, 300px);
+        border-radius: 16px;
+    }
+
+    body.fullscreen-mode .cover-art-placeholder::before {
+        font-size: 60px;
+    }
+
+    body.fullscreen-mode .cover-dancing-bars {
+        gap: 4px; /* Smaller gap for mobile */
+    }
+
+    body.fullscreen-mode .cover-dancing-bars .bar {
+        width: 4px; /* Thinner bars for mobile */
+        border-radius: 2px;
+    }
+
+    body.fullscreen-mode .cover-dancing-bars.left {
+        left: calc(50% - min(25vh, 150px) - 15px - 20px); /* Adjust for smaller mobile cover */
+    }
+
+    body.fullscreen-mode .cover-dancing-bars.right {
+        right: calc(50% - min(25vh, 150px) - 15px - 20px); /* Adjust for smaller mobile cover */
+    }
+
+    body.fullscreen-mode #file-name {
+        top: 15%;
+        font-size: 1rem;
+    }
+
+    body.fullscreen-mode .container {
+        padding: 1rem;
+    }
+
+    body.fullscreen-mode .custom-player {
+        bottom: 1rem;
+        width: 95%;
+    }
+}
+
+/* Queue Modal Styles */
+.queue-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    z-index: 1000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.queue-modal-content {
+    background: linear-gradient(135deg, 
+        rgba(255, 255, 255, 0.1) 0%,
+        rgba(255, 255, 255, 0.05) 50%,
+        rgba(255, 255, 255, 0.02) 100%);
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    box-shadow: 
+        0 12px 40px 0 rgba(31, 38, 135, 0.5),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.1),
+        inset 0 -1px 0 0 rgba(255, 255, 255, 0.05);
+    width: 90%;
+    max-width: 500px;
+    max-height: 70vh;
+    overflow: hidden;
+    color: var(--text-color);
+}
+
+.queue-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.queue-modal-header h3 {
+    margin: 0;
+    font-size: 1.4rem;
+    font-weight: 600;
+}
+
+.close-queue-btn {
+    background: none;
+    border: none;
+    color: var(--text-color);
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0.5rem;
+    border-radius: 8px;
+    transition: background 0.3s ease;
+}
+
+.close-queue-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.queue-modal-body {
+    padding: 0;
+    max-height: 50vh;
+    overflow-y: auto;
+}
+
+.queue-list {
+    padding: 1rem;
+}
+
+.empty-queue {
+    text-align: center;
+    color: var(--text-muted-color);
+    font-style: italic;
+    padding: 2rem;
+}
+
+.queue-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.8rem;
+    border-radius: 12px;
+    margin-bottom: 0.5rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+.queue-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+    transform: translateY(-1px);
+}
+
+.queue-item.current {
+    background: rgba(var(--primary-color-rgb, 96, 165, 250), 0.2);
+    border-color: rgba(var(--primary-color-rgb, 96, 165, 250), 0.4);
+    box-shadow: 0 0 20px rgba(var(--primary-color-rgb, 96, 165, 250), 0.3);
+}
+
+.queue-item-cover {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    object-fit: cover;
+    background: rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    color: var(--text-muted-color);
+}
+
+.queue-item-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.queue-item-title {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 0.2rem;
+}
+
+.queue-item-status {
+    font-size: 0.8rem;
+    color: var(--text-muted-color);
+}
+
+.queue-item-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.queue-item-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    color: var(--text-color);
+    cursor: pointer;
+    padding: 0.3rem 0.5rem;
+    font-size: 0.8rem;
+    transition: all 0.3s ease;
+}
+
+.queue-item-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.queue-item-btn.danger:hover {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: rgba(239, 68, 68, 0.4);
+    color: #fca5a5;
+}
+
+/* Mobile responsive adjustments for queue modal */
+@media (max-width: 600px) {
+    .queue-modal-content {
+        width: 95%;
+        margin: 1rem;
+        max-height: 80vh;
+    }
+    
+    .queue-modal-header {
+        padding: 1rem;
+    }
+    
+    .queue-modal-header h3 {
+        font-size: 1.2rem;
+    }
+    
+    .queue-item {
+        padding: 0.6rem;
+        gap: 0.8rem;
+    }
+    
+    .queue-item-cover {
+        width: 35px;
+        height: 35px;
+    }
+    
+    .queue-item-actions {
+        gap: 0.3rem;
+    }
+    
+    .queue-item-btn {
+        padding: 0.2rem 0.4rem;
+        font-size: 0.7rem;
+    }
+}
 /* Animated sliding for long audio file names - back and forth movement */
 @keyframes slide-horizontal {
   0% { 
@@ -77,18 +531,18 @@ body {
 
 .container {
     background-color: var(--surface-color);
-    padding: 1.5rem;
-    border-radius: 24px;
+    padding: 1.8rem;
+    border-radius: 28px;
     border: 1px solid var(--surface-border-color);
-    box-shadow: 0 12px 45px var(--shadow-color);
+    box-shadow: 0 12px 40px var(--shadow-color);
     width: 100%;
-    max-width: 400px;
+    max-width: 420px;
     text-align: center;
     display: flex;
     flex-direction: column;
-    gap: 0.8rem;
-    backdrop-filter: blur(12px); /* Glassmorphism effect */
-    -webkit-backdrop-filter: blur(12px);
+    gap: 1.1rem;
+    backdrop-filter: blur(16px); /* Glassmorphism effect */
+    -webkit-backdrop-filter: blur(16px);
     transition: background 0.5s ease; /* Smooth transition for background changes */
 }
 
@@ -130,16 +584,16 @@ body {
 
 /* Cover Art Placeholder for when no cover art is available */
 .cover-art-placeholder {
-    width: 220px;
-    height: 220px;
+    width: 260px;
+    height: 260px;
     margin: 0 auto;
-    border-radius: 16px;
+    border-radius: 20px;
     background: linear-gradient(135deg, 
         rgba(255, 255, 255, 0.1) 0%,
         rgba(255, 255, 255, 0.05) 50%,
         rgba(255, 255, 255, 0.02) 100%);
     border: 1px solid var(--surface-border-color);
-    box-shadow: 0 8px 25px var(--shadow-light-color);
+    box-shadow: 0 10px 32px var(--shadow-light-color);
     display: none; /* Hidden by default */
     position: relative;
     backdrop-filter: blur(10px);
@@ -399,17 +853,17 @@ audio#player {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    padding: 1.2rem;
+    padding: 1rem 1.2rem;
     background: linear-gradient(135deg, 
         rgba(255, 255, 255, 0.1) 0%,
         rgba(255, 255, 255, 0.05) 50%,
         rgba(255, 255, 255, 0.02) 100%);
-    border-radius: 20px;
+    border-radius: 28px;
     border: 1px solid rgba(255, 255, 255, 0.18);
-    backdrop-filter: blur(20px) saturate(180%);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
     box-shadow: 
-        0 8px 32px 0 rgba(31, 38, 135, 0.37),
+        0 12px 40px 0 rgba(31, 38, 135, 0.37),
         inset 0 1px 0 0 rgba(255, 255, 255, 0.1),
         inset 0 -1px 0 0 rgba(255, 255, 255, 0.05);
     position: relative;
@@ -462,15 +916,17 @@ audio#player {
     display: flex;
     align-items: center;
     gap: 1rem;
+    justify-content: center; /* Center the control buttons */
 }
 
 .progress-bar-container {
-    flex: 1;
+    width: 100%; /* Full width when it's its own row */
     position: relative;
     height: 20px; /* Increased to accommodate the handle */
     cursor: pointer;
     display: flex;
     align-items: center; /* Center the progress bar vertically */
+    margin-bottom: 0.5rem; /* Add some space below the progress bar */
 }
 
 .progress-bar {
@@ -554,6 +1010,12 @@ audio#player {
     display: flex;
     align-items: center;
     justify-content: center;
+    transition: opacity 0.3s ease;
+}
+
+.player-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 .player-btn i {
@@ -700,27 +1162,33 @@ audio#player {
 
 /* Responsive adjustments for custom player */
 @media (max-width: 600px) {
+    .container {
+        max-width: 95vw;
+        padding: 0.5rem;
+        border-radius: 12px;
+        gap: 0.3rem;
+    }
     .custom-player {
-        padding: 0.8rem;
-        gap: 0.4rem;
+        padding: 0.5rem;
+        gap: 0.3rem;
+        border-radius: 12px;
     }
-    
+    .main-heading {
+        font-size: 22px;
+    }
     .main-player-row {
-        gap: 0.8rem;
+        gap: 0.5rem;
     }
-    
     .player-btn {
-        width: 45px;
-        height: 45px;
+        width: 36px;
+        height: 36px;
     }
-    
     .volume-btn {
-        width: 35px;
-        height: 35px;
+        width: 28px;
+        height: 28px;
     }
-    
     .volume-slider-vertical {
-        height: 60px;
+        height: 40px;
     }
 }
 
