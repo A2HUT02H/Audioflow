@@ -20,6 +20,9 @@
       .main-heading {
         font-family: 'Jost', Arial, sans-serif;
       }
+      .container {
+        position: relative;
+      }
     </style>
     <div class="container">
         <header class="main-header">
@@ -29,6 +32,7 @@
                 <span class="member-count"><i class="fa-solid fa-user-group"></i> {{ member_count if member_count is defined else 1 }}</span>
                 <div class="room-code-display">Room code: <span>{{ room_id }}</span></div>
                 <a href="{{ url_for('create_room') }}" class="create-new-room-button" title="Create New Room" style="margin-left: 10px;">+</a>
+                <a href="/" class="exit-room-button" title="Exit Room" style="margin-left: 5px;"><i class="fas fa-sign-out-alt"></i></a>
             </div>
         </div>
         </header>
@@ -117,18 +121,27 @@
                 <span id="total-time">0:00</span>
             </div>
             
+            <!-- Progress bar row -->
+            <div class="progress-bar-container">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                    <div class="progress-handle" id="progress-handle"></div>
+                </div>
+            </div>
+            
             <!-- Main playback controls row -->
             <div class="main-player-row">
+                <button class="control-button player-btn" id="prev-btn" title="Previous Song">
+                    <i class="fas fa-step-backward"></i>
+                </button>
+                
                 <button class="control-button player-btn" id="play-pause-btn">
                     <i class="fas fa-play" id="play-pause-icon"></i>
                 </button>
                 
-                <div class="progress-bar-container">
-                    <div class="progress-bar">
-                        <div class="progress-fill" id="progress-fill"></div>
-                        <div class="progress-handle" id="progress-handle"></div>
-                    </div>
-                </div>
+                <button class="control-button player-btn" id="next-btn" title="Next Song">
+                    <i class="fas fa-step-forward"></i>
+                </button>
                 
                 <div class="volume-control">
                     <button class="control-button volume-btn" id="volume-btn">
@@ -157,8 +170,32 @@
             <button id="sync-btn" class="control-button">
                 <i class="fas fa-sync-alt"></i>Sync
             </button>
+            <button id="queue-btn" class="control-button">
+                <i class="fas fa-list"></i>Queue (<span id="queue-count">0</span>)
+            </button>
+        </div>
+
+        <!-- Fullscreen Toggle Button (hidden by default, shown when audio is loaded) -->
+        <button id="fullscreen-btn" class="fullscreen-btn" title="Toggle fullscreen">
+            <i class="fa-solid fa-up-right-and-down-left-from-center"></i>
+        </button>
+
+        <!-- Queue Modal -->
+        <div id="queue-modal" class="queue-modal" style="display: none;">
+            <div class="queue-modal-content">
+                <div class="queue-modal-header">
+                    <h3>Queue</h3>
+                    <button id="close-queue" class="close-queue-btn">&times;</button>
+                </div>
+                <div class="queue-modal-body">
+                    <div id="queue-list" class="queue-list">
+                        <p class="empty-queue">No songs in queue</p>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/color-thief/2.3.2/color-thief.umd.js"></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="/static/script.js"></script>
