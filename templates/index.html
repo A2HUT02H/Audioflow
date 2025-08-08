@@ -131,11 +131,15 @@
             
             <!-- Main playback controls row -->
             <div class="main-player-row">
+                <button class="control-button player-btn" id="shuffle-btn" title="Shuffle">
+                    <i class="fas fa-shuffle" id="shuffle-icon"></i>
+                </button>
+                
                 <button class="control-button player-btn" id="prev-btn" title="Previous Song">
                     <i class="fas fa-step-backward"></i>
                 </button>
                 
-                <button class="control-button player-btn" id="play-pause-btn">
+                <button class="control-button player-btn play-btn-large" id="play-pause-btn">
                     <i class="fas fa-play" id="play-pause-icon"></i>
                 </button>
                 
@@ -143,8 +147,12 @@
                     <i class="fas fa-step-forward"></i>
                 </button>
                 
+                <button class="control-button player-btn" id="loop-btn" title="Loop">
+                    <i class="fas fa-repeat" id="loop-icon"></i>
+                </button>
+                
                 <div class="volume-control">
-                    <button class="control-button volume-btn" id="volume-btn">
+                    <button class="control-button volume-btn" id="volume-btn"> 
                         <i class="fas fa-volume-up" id="volume-icon"></i>
                     </button>
                     <div class="volume-popup" id="volume-popup">
