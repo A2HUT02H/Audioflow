@@ -19,11 +19,46 @@ document.addEventListener('DOMContentLoaded', () => {
     const coverDancingBarsLeft = document.querySelector('.cover-dancing-bars.left');
     const coverDancingBarsRight = document.querySelector('.cover-dancing-bars.right');
 
+    // Keep dancing bars inside container across devices by tying CSS vars to real cover size
+    function updateCoverPositionVars() {
+        const coverSection = document.querySelector('.cover-section');
+        if (!coverSection) return;
+
+        // Use whichever is visible: cover image or placeholder
+        const coverEl = (coverArt && coverArt.offsetParent !== null && coverArt.style.display !== 'none')
+            ? coverArt
+            : coverArtPlaceholder;
+        if (!coverEl) return;
+
+        const coverWidth = coverEl.clientWidth || parseFloat(getComputedStyle(coverEl).width) || 0;
+        if (!coverWidth) return;
+
+        // Set precise cover size var in px so bar positioning matches layout
+        coverSection.style.setProperty('--cover-size', `${Math.round(coverWidth)}px`);
+
+        // Derive group width from computed styles (3 bars + 2 gaps)
+        const barsGroup = document.querySelector('.cover-dancing-bars.left') || document.querySelector('.cover-dancing-bars.right');
+        const oneBar = barsGroup ? barsGroup.querySelector('.bar') : null;
+        const barWidth = oneBar ? parseFloat(getComputedStyle(oneBar).width) : 3;
+        const gap = barsGroup ? parseFloat(getComputedStyle(barsGroup).gap) : 3;
+        const groupWidth = (barWidth * 3) + (gap * 2);
+        coverSection.style.setProperty('--bar-group-width', `${Math.round(groupWidth)}px`);
+
+        // Keep a conservative minimal gap (device differences can cause rounding)
+        const isMobile = window.innerWidth <= 600;
+        const baseGap = isMobile ? 6 : 10;
+        coverSection.style.setProperty('--bar-gap', `${baseGap}px`);
+    }
+
     // --- Custom Player Elements ---
     const playPauseBtn = document.getElementById('play-pause-btn');
     const playPauseIcon = document.getElementById('play-pause-icon');
     const prevBtn = document.getElementById('prev-btn');
     const nextBtn = document.getElementById('next-btn');
+    const loopBtn = document.getElementById('loop-btn');
+    const loopIcon = document.getElementById('loop-icon');
+    const shuffleBtn = document.getElementById('shuffle-btn');
+    const shuffleIcon = document.getElementById('shuffle-icon');
     const currentTimeDisplay = document.getElementById('current-time');
     const totalTimeDisplay = document.getElementById('total-time');
     const progressBar = document.querySelector('.progress-bar');
@@ -48,6 +83,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let isDraggingProgress = false;
     let isDraggingVolume = false;
     let lastVolume = 0.7; // Remember last volume for mute/unmute
+    let isLooping = false; // Loop state
+    let isShuffling = false; // Shuffle state
 
     let serverTimeOffset = 0;
 
@@ -218,9 +255,23 @@ document.addEventListener('DOMContentLoaded', () => {
         const rightMid = rightDataArray[15];   // Mid freq
         const rightTreble = rightDataArray[25]; // High freq (treble)
 
-        // Dynamic max height based on fullscreen mode
+        // Dynamic max height based on fullscreen mode and screen size
         const isFullscreen = document.body.classList.contains('fullscreen-mode');
-        const maxHeight = isFullscreen ? 280 : 180; // Taller bars in fullscreen
+        const isMobile = window.innerWidth <= 600;
+        const isExtraSmall = window.innerWidth <= 400;
+        
+        let maxHeight;
+        if (isFullscreen) {
+            if (isExtraSmall) {
+                maxHeight = 180; // Smaller bars for extra small mobile screens in fullscreen
+            } else if (isMobile) {
+                maxHeight = 220; // Medium bars for mobile screens in fullscreen
+            } else {
+                maxHeight = 280; // Full height bars for desktop fullscreen
+            }
+        } else {
+            maxHeight = 180; // Default height for non-fullscreen mode
+        }
 
         const normalize = (value, max = 255, silenceThreshold = 10) => {
             if (value < silenceThreshold) return '0px';  // Fully collapse if quiet
@@ -408,6 +459,92 @@ document.addEventListener('DOMContentLoaded', () => {
             playPauseIcon.className = 'fas fa-play';
         } else {
             playPauseIcon.className = 'fas fa-pause';
+        }
+    }
+
+    function toggleLoop() {
+        isLooping = !isLooping;
+        updateLoopButton();
+        console.log('Loop mode:', isLooping ? 'enabled' : 'disabled');
+        
+        // Synchronize loop state across all devices in the room
+        socket.emit('loop_toggle', { room: roomId, isLooping: isLooping });
+    }
+
+    function updateLoopButton() {
+        if (!loopBtn || !loopIcon) {
+            console.log('Loop button elements not yet available');
+            return;
+        }
+        
+        if (isLooping) {
+            loopBtn.classList.add('loop-active');
+            
+            // Apply dynamic color from progress bar
+            const progressFillStyle = window.getComputedStyle(progressFill);
+            const backgroundImage = progressFillStyle.backgroundImage;
+            
+            if (backgroundImage && backgroundImage !== 'none') {
+                // Extract the gradient and apply it with lower opacity for the loop button
+                const activeGradient = backgroundImage.replace(/rgba?\(([^)]+)\)/g, (match, params) => {
+                    // Parse the rgba values and reduce opacity
+                    const values = params.split(',').map(v => v.trim());
+                    if (values.length >= 3) {
+                        const alpha = values.length === 4 ? Math.min(parseFloat(values[3]) * 0.3, 0.3) : 0.3;
+                        return `rgba(${values[0]}, ${values[1]}, ${values[2]}, ${alpha})`;
+                    }
+                    return match;
+                });
+                
+                loopBtn.style.setProperty('background', activeGradient, 'important');
+            }
+        } else {
+            loopBtn.classList.remove('loop-active');
+            // Remove any custom background to revert to default styling
+            loopBtn.style.removeProperty('background');
+        }
+    }
+
+    function toggleShuffle() {
+        isShuffling = !isShuffling;
+        updateShuffleButton();
+        console.log('Shuffle mode:', isShuffling ? 'enabled' : 'disabled');
+        
+        // Synchronize shuffle state across all devices in the room
+        socket.emit('shuffle_toggle', { room: roomId, isShuffling: isShuffling });
+    }
+
+    function updateShuffleButton() {
+        if (!shuffleBtn || !shuffleIcon) {
+            console.log('Shuffle button elements not yet available');
+            return;
+        }
+        
+        if (isShuffling) {
+            shuffleBtn.classList.add('shuffle-active');
+            
+            // Apply dynamic color from progress bar
+            const progressFillStyle = window.getComputedStyle(progressFill);
+            const backgroundImage = progressFillStyle.backgroundImage;
+            
+            if (backgroundImage && backgroundImage !== 'none') {
+                // Extract the gradient and apply it with lower opacity for the shuffle button
+                const activeGradient = backgroundImage.replace(/rgba?\(([^)]+)\)/g, (match, params) => {
+                    // Parse the rgba values and reduce opacity
+                    const values = params.split(',').map(v => v.trim());
+                    if (values.length >= 3) {
+                        const alpha = values.length === 4 ? Math.min(parseFloat(values[3]) * 0.3, 0.3) : 0.3;
+                        return `rgba(${values[0]}, ${values[1]}, ${values[2]}, ${alpha})`;
+                    }
+                    return match;
+                });
+                
+                shuffleBtn.style.setProperty('background', activeGradient, 'important');
+            }
+        } else {
+            shuffleBtn.classList.remove('shuffle-active');
+            // Remove any custom background to revert to default styling
+            shuffleBtn.style.removeProperty('background');
         }
     }
 
@@ -608,6 +745,8 @@ document.addEventListener('DOMContentLoaded', () => {
         player.volume = lastVolume;
         updateVolumeDisplay();
         updatePlayPauseButton();
+        updateLoopButton();
+        updateShuffleButton();
         updateProgressBar();
 
         // Play/Pause button
@@ -660,6 +799,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Player event listeners for custom controls
         player.addEventListener('loadedmetadata', () => {
             updateProgressBar();
+            updateCoverPositionVars();
         });
 
         player.addEventListener('timeupdate', () => {
@@ -668,10 +808,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         player.addEventListener('play', () => {
             updatePlayPauseButton();
+            updateCoverPositionVars();
         });
 
         player.addEventListener('pause', () => {
             updatePlayPauseButton();
+            updateCoverPositionVars();
         });
 
         player.addEventListener('volumechange', () => {
@@ -774,7 +916,9 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         
-        initCustomPlayer();
+    initCustomPlayer();
+    // Update cover-based CSS variables after layout is stable
+    setTimeout(updateCoverPositionVars, 50);
     }, 100);
 
     // Close volume popup when clicking outside
@@ -789,6 +933,32 @@ document.addEventListener('DOMContentLoaded', () => {
             hideVolumePopup();
         }
     });
+
+    // Keep bar alignment updated on viewport and fullscreen changes
+    window.addEventListener('resize', updateCoverPositionVars);
+    window.addEventListener('orientationchange', updateCoverPositionVars);
+    document.addEventListener('fullscreenchange', updateCoverPositionVars);
+    // Observe body class changes (fullscreen-mode toggled via class)
+    const classObserver = new MutationObserver((mutations) => {
+        for (const m of mutations) {
+            if (m.type === 'attributes' && m.attributeName === 'class') {
+                updateCoverPositionVars();
+                break;
+            }
+        }
+    });
+    classObserver.observe(document.body, { attributes: true });
+
+    // Observe size changes of cover section and cover image/placeholder
+    if ('ResizeObserver' in window) {
+        const ro = new ResizeObserver(() => {
+            updateCoverPositionVars();
+        });
+        const coverSectionEl = document.querySelector('.cover-section');
+        if (coverSectionEl) ro.observe(coverSectionEl);
+        if (coverArt) ro.observe(coverArt);
+        if (coverArtPlaceholder) ro.observe(coverArtPlaceholder);
+    }
 
     // =================================================================================
     // User Action Event Listeners
@@ -903,6 +1073,20 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Loop button
+    if (loopBtn) {
+        loopBtn.addEventListener('click', () => {
+            toggleLoop();
+        });
+    }
+
+    // Shuffle button
+    if (shuffleBtn) {
+        shuffleBtn.addEventListener('click', () => {
+            toggleShuffle();
+        });
+    }
+
     player.addEventListener('play', () => {
         if (isReceivingUpdate) return;
         fileNameDisplay.classList.add('playing');
@@ -926,15 +1110,34 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     player.addEventListener('ended', () => {
-        console.log('Song ended, attempting to play next song automatically');
+        console.log('Song ended, checking for synchronized loop and shuffle modes...');
+        
+        // If loop mode is enabled, restart the current song for all devices
+        if (isLooping) {
+            console.log('Loop mode enabled, triggering restart for all devices');
+            // Emit loop restart event to synchronize all devices
+            socket.emit('loop_restart', { room: roomId });
+            
+            // Also restart locally
+            player.currentTime = 0;
+            player.play();
+            return;
+        }
+        
+        console.log('Loop mode disabled, checking shuffle and queue...');
         fileNameDisplay.classList.remove('playing');
         hideCoverDancingBars();
         updateFileNameAnimation(); // Recalculate for paused state
         
         // Automatically play next song if there are multiple songs in queue
         if (currentQueue.length > 1) {
-            console.log('Auto-playing next song from queue');
-            socket.emit('next_song', { room: roomId, auto_play: true });
+            if (isShuffling) {
+                console.log('Shuffle mode enabled, playing random next song');
+                socket.emit('shuffle_next', { room: roomId, auto_play: true });
+            } else {
+                console.log('Normal mode, auto-playing next song from queue');
+                socket.emit('next_song', { room: roomId, auto_play: true });
+            }
         } else {
             console.log('No more songs in queue, staying on current song');
         }
@@ -1011,6 +1214,7 @@ document.addEventListener('DOMContentLoaded', () => {
         showCoverDancingBars();
         updateFileNameAnimation(); // Recalculate layout for playing state
         updateThemeForPlayingState();
+    updateCoverPositionVars();
         
         if (delay > 0) {
             setTimeout(() => player.play(), delay);
@@ -1030,6 +1234,7 @@ document.addEventListener('DOMContentLoaded', () => {
         hideCoverDancingBars();
         updateFileNameAnimation(); // Recalculate layout for paused state
         updateThemeForPlayingState();
+    updateCoverPositionVars();
         setTimeout(() => { isReceivingUpdate = false; }, 150);
     });
 
@@ -1061,6 +1266,19 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('[DEBUG] Room state filename type:', typeof data.current_file);
         }
         
+        // Synchronize loop and shuffle states from room state
+        if (data.hasOwnProperty('isLooping')) {
+            console.log('[DEBUG] Synchronizing loop state from room:', data.isLooping);
+            isLooping = data.isLooping;
+            updateLoopButton();
+        }
+        
+        if (data.hasOwnProperty('is_shuffling')) {
+            console.log('[DEBUG] Synchronizing shuffle state from room:', data.is_shuffling);
+            isShuffling = data.is_shuffling;
+            updateShuffleButton();
+        }
+        
         if (data.current_file) {
             // Use display filename if available, otherwise fallback to filename
             const displayFilename = data.current_file_display || data.current_file;
@@ -1077,6 +1295,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 showCoverDancingBars();
                 updateFileNameAnimation(); // Recalculate layout for playing state
                 updateThemeForPlayingState();
+                updateCoverPositionVars();
                 
                 setTimeout(() => player.play(), delay);
                 setTimeout(() => { isReceivingUpdate = false; }, delay + 100);
@@ -1085,6 +1304,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 player.pause();
                 hideCoverDancingBars();
                 updateFileNameAnimation(); // Recalculate layout for paused state
+                updateCoverPositionVars();
             }
         }
     });
@@ -1124,6 +1344,37 @@ document.addEventListener('DOMContentLoaded', () => {
     socket.on('error', (data) => {
         alert(data.message);
         window.location.href = '/';
+    });
+
+    // Synchronize loop state across all devices
+    socket.on('loop_state_update', (data) => {
+        console.log('Received loop state update:', data.isLooping);
+        isLooping = data.isLooping;
+        updateLoopButton();
+    });
+
+    // Handle loop-triggered playback from other devices
+    socket.on('loop_restart', (data) => {
+        console.log('Loop restart triggered by another device');
+        isReceivingUpdate = true;
+        player.currentTime = 0;
+        
+        fileNameDisplay.classList.add('playing');
+        showCoverDancingBars();
+        updateFileNameAnimation();
+        updateThemeForPlayingState();
+    updateCoverPositionVars();
+        
+        // Start playback immediately since it's a loop restart
+        player.play();
+        setTimeout(() => { isReceivingUpdate = false; }, 100);
+    });
+
+    // Synchronize shuffle state across all devices
+    socket.on('shuffle_state_update', (data) => {
+        console.log('Received shuffle state update:', data.isShuffling);
+        isShuffling = data.isShuffling;
+        updateShuffleButton();
     });
 
     // =================================================================================
@@ -1200,6 +1451,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 coverArtPlaceholder.classList.remove('visible');
             }
             updateFileNameAnimation();
+            updateCoverPositionVars();
             // Hide fullscreen button if no audio
             if (fullscreenBtn) fullscreenBtn.style.setProperty('display', 'none', 'important');
             return;
@@ -1226,7 +1478,8 @@ document.addEventListener('DOMContentLoaded', () => {
         coverArt.style.boxShadow = 'none';
         hideCoverDancingBars();
         resetTheme();
-        updateFileNameAnimation();
+    updateFileNameAnimation();
+    updateCoverPositionVars();
         // Show fullscreen button when audio is loaded
         if (fullscreenBtn) fullscreenBtn.style.setProperty('display', 'flex', 'important');
         
@@ -1248,6 +1501,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const [r, g, b] = dominantColor;
                     coverArt.style.boxShadow = `0 0 15px rgba(${r},${g},${b},0.6), 0 0 35px rgba(${r},${g},${b},0.4)`;
                     applyTheme(dominantColor, palette);
+                    updateCoverPositionVars();
                     
                     // Setup 3D tilt effect for cover art
                     setup3DTiltEffect(coverArt);
@@ -1267,6 +1521,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     setup3DTiltEffect(coverArtPlaceholder);
                 }
                 resetTheme();
+                updateCoverPositionVars();
             };
         } else {
             // No cover art available, show placeholder
@@ -1281,6 +1536,7 @@ document.addEventListener('DOMContentLoaded', () => {
             currentDominantColor = null;
             currentColorPalette = null;
             resetTheme();
+            updateCoverPositionVars();
         }
     }
 
@@ -1302,6 +1558,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Initialize audio context and start visualizer
         initAudioContext();
         startVisualizer();
+    updateCoverPositionVars();
     }
 
     function hideCoverDancingBars() {
@@ -1310,6 +1567,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Stop visualizer
         stopVisualizer();
+    updateCoverPositionVars();
     }
 
     function updateThemeForPlayingState() {
