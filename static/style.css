@@ -61,6 +61,84 @@
         inset 0 -1px 0 0 rgba(255, 255, 255, 0.06);
 }
 
+/* Loop Button Active State */
+.player-btn.loop-active {
+    background: linear-gradient(135deg, 
+        rgba(255, 50, 50, 0.2) 0%,
+        rgba(255, 61, 171, 0.2) 50%,
+        rgba(255, 69, 184, 0.2) 100%);
+    border-color: var(--current-border-color, rgba(255, 50, 50, 0.4));
+    box-shadow: 
+        0 8px 32px 0 rgba(255, 50, 50, 0.3),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.2),
+        inset 0 -1px 0 0 rgba(255, 255, 255, 0.1);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.player-btn.loop-active::before {
+    background: linear-gradient(135deg, 
+        rgba(255, 50, 50, 0.15) 0%,
+        rgba(255, 61, 171, 0.1) 50%,
+        rgba(255, 69, 184, 0.15) 100%);
+    opacity: 1;
+}
+
+.player-btn.loop-active:hover {
+    background: linear-gradient(135deg, 
+        rgba(255, 50, 50, 0.25) 0%,
+        rgba(255, 61, 171, 0.25) 50%,
+        rgba(255, 69, 184, 0.25) 100%);
+    border-color: var(--current-border-color, rgba(255, 50, 50, 0.5));
+    box-shadow: 
+        0 12px 40px 0 rgba(255, 50, 50, 0.4),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.25),
+        inset 0 -1px 0 0 rgba(255, 255, 255, 0.15);
+}
+
+.player-btn.loop-active i {
+    color: rgba(255, 255, 255, 0.95);
+    text-shadow: 0 0 8px var(--current-border-color, rgba(255, 50, 50, 0.5));
+}
+
+/* Shuffle Button Active State */
+.player-btn.shuffle-active {
+    background: linear-gradient(135deg, 
+        rgba(50, 255, 50, 0.2) 0%,
+        rgba(61, 255, 171, 0.2) 50%,
+        rgba(69, 255, 184, 0.2) 100%);
+    border-color: var(--current-border-color, rgba(50, 255, 50, 0.4));
+    box-shadow: 
+        0 8px 32px 0 rgba(50, 255, 50, 0.3),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.2),
+        inset 0 -1px 0 0 rgba(255, 255, 255, 0.1);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.player-btn.shuffle-active::before {
+    background: linear-gradient(135deg, 
+        rgba(50, 255, 50, 0.15) 0%,
+        rgba(61, 255, 171, 0.1) 50%,
+        rgba(69, 255, 184, 0.15) 100%);
+    opacity: 1;
+}
+
+.player-btn.shuffle-active:hover {
+    background: linear-gradient(135deg, 
+        rgba(50, 255, 50, 0.25) 0%,
+        rgba(61, 255, 171, 0.25) 50%,
+        rgba(69, 255, 184, 0.25) 100%);
+    border-color: var(--current-border-color, rgba(50, 255, 50, 0.5));
+    box-shadow: 
+        0 12px 40px 0 rgba(50, 255, 50, 0.4),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.25),
+        inset 0 -1px 0 0 rgba(255, 255, 255, 0.15);
+}
+
+.player-btn.shuffle-active i {
+    color: rgba(255, 255, 255, 0.95);
+    text-shadow: 0 0 8px var(--current-border-color, rgba(50, 255, 50, 0.5));
+}
+
 /* Fullscreen Button Styles */
 .fullscreen-btn {
     position: absolute;
@@ -126,6 +204,9 @@ body.fullscreen-mode .container {
     flex-direction: column;
     justify-content: space-between;
     align-items: center;
+    /* Ensure content doesn't get cut off on mobile */
+    min-height: 100vh;
+    overflow: visible;
 }
 
 body.fullscreen-mode .cover-section {
@@ -162,11 +243,31 @@ body.fullscreen-mode .custom-player {
     width: 90%;
     max-width: 600px;
     z-index: 50;
+    /* Ensure it's always visible on mobile */
+    min-height: 60px;
+}
+
+/* Keep play button size comfortable in fullscreen */
+body.fullscreen-mode .play-btn-large {
+    width: 60px !important;
+    height: 60px !important;
 }
 
 body.fullscreen-mode .upload-wrapper,
 body.fullscreen-mode .sync-wrapper {
     display: none;
+}
+
+body.fullscreen-mode .main-header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    z-index: 100;
+    padding: 1rem 2rem;
+
+    /* Removed blur effect in fullscreen mode */
 }
 
 body.fullscreen-mode .controls-section {
@@ -188,6 +289,15 @@ body.fullscreen-mode #file-name {
 body.fullscreen-mode .cover-dancing-bars {
     gap: 6px; /* Increase gap between bars */
 }
+/* Tie bar position to actual fullscreen cover size */
+body.fullscreen-mode .cover-section {
+    /* Default fullscreen cover size */
+    --fs-cover-size: min(60vh, 500px);
+    /* Horizontal gap between cover edge and bars (smaller = closer) */
+    --fs-bar-gap: 12px;
+    /* Group width for 3 bars + 2 gaps (desktop: 6px bars, 6px gaps => 30px) */
+    --fs-bar-group: 30px;
+}
 
 body.fullscreen-mode .cover-dancing-bars .bar {
     width: 6px; /* Make bars thicker */
@@ -195,60 +305,180 @@ body.fullscreen-mode .cover-dancing-bars .bar {
 }
 
 body.fullscreen-mode .cover-dancing-bars.left {
-    left: calc(50% - min(30vh, 250px) - 20px - 30px); /* Adjust for larger bars and gap */
+    left: calc(50% - (var(--fs-cover-size) / 2) - var(--fs-bar-gap) - var(--fs-bar-group));
 }
 
 body.fullscreen-mode .cover-dancing-bars.right {
-    right: calc(50% - min(30vh, 250px) - 20px - 30px); /* Adjust for larger bars and gap */
+    right: calc(50% - (var(--fs-cover-size) / 2) - var(--fs-bar-gap) - var(--fs-bar-group));
 }
 
 /* Mobile responsive adjustments for fullscreen mode */
 @media (max-width: 600px) {
+    body.fullscreen-mode {
+        height: 100svh; /* Use small viewport height for mobile browsers */
+        overflow-y: auto; /* Allow scrolling if needed */
+    }
+    
+    body.fullscreen-mode .container {
+        height: 100svh;
+        padding: 1rem;
+        padding-top: max(1rem, env(safe-area-inset-top));
+        padding-bottom: max(1rem, env(safe-area-inset-bottom));
+    }
+
+    body.fullscreen-mode .main-header {
+        padding: 0.75rem 1rem;
+        font-size: 0.9rem;
+    }
+
+    body.fullscreen-mode .main-header .main-heading {
+        font-size: 1.2rem;
+    }
+
     body.fullscreen-mode #cover-art {
-        width: min(50vh, 300px);
-        height: min(50vh, 300px);
+        width: min(40vh, 280px); /* Reduced size to leave more room for controls */
+        height: min(40vh, 280px);
         border-radius: 16px;
     }
 
     body.fullscreen-mode .cover-art-placeholder {
-        width: min(50vh, 300px);
-        height: min(50vh, 300px);
+        width: min(40vh, 280px);
+        height: min(40vh, 280px);
         border-radius: 16px;
     }
 
     body.fullscreen-mode .cover-art-placeholder::before {
-        font-size: 60px;
+        font-size: 50px;
     }
 
     body.fullscreen-mode .cover-dancing-bars {
         gap: 4px; /* Smaller gap for mobile */
+        z-index: 10; /* Ensure visibility */
     }
 
     body.fullscreen-mode .cover-dancing-bars .bar {
         width: 4px; /* Thinner bars for mobile */
         border-radius: 2px;
+        min-height: 8px; /* Ensure minimum visibility */
+    }
+
+    /* Mobile fullscreen variables: 4px bars + 4px gaps => 20px group */
+    body.fullscreen-mode .cover-section {
+        --fs-cover-size: min(40vh, 280px);
+        --fs-bar-gap: 10px;
+        --fs-bar-group: 20px;
     }
 
     body.fullscreen-mode .cover-dancing-bars.left {
-        left: calc(50% - min(25vh, 150px) - 15px - 20px); /* Adjust for smaller mobile cover */
+        left: calc(50% - (var(--fs-cover-size) / 2) - var(--fs-bar-gap) - var(--fs-bar-group));
+        display: flex !important; /* Force visibility when active */
     }
 
     body.fullscreen-mode .cover-dancing-bars.right {
-        right: calc(50% - min(25vh, 150px) - 15px - 20px); /* Adjust for smaller mobile cover */
+        right: calc(50% - (var(--fs-cover-size) / 2) - var(--fs-bar-gap) - var(--fs-bar-group));
+        display: flex !important; /* Force visibility when active */
+    }
+
+    /* Ensure all 3 bars are visible in mobile fullscreen */
+    body.fullscreen-mode .cover-dancing-bars.visible {
+        display: flex !important;
+        opacity: 1;
+    }
+
+    body.fullscreen-mode .cover-dancing-bars.visible .bar {
+        opacity: 1;
+        visibility: visible;
     }
 
     body.fullscreen-mode #file-name {
-        top: 15%;
+        top: 18%; /* Moved down to avoid header overlap */
         font-size: 1rem;
     }
 
+    body.fullscreen-mode .custom-player {
+        bottom: max(1rem, env(safe-area-inset-bottom));
+        width: 95%;
+        position: fixed;
+        z-index: 100;
+    }
+}
+
+/* Extra small mobile devices - fullscreen mode */
+@media (max-width: 400px) {
+    body.fullscreen-mode {
+        height: 100svh;
+        overflow-y: auto;
+    }
+    
     body.fullscreen-mode .container {
-        padding: 1rem;
+        height: 100svh;
+        padding: 0.75rem;
+        padding-top: max(0.75rem, env(safe-area-inset-top));
+        padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+    }
+
+    body.fullscreen-mode .main-header {
+        padding: 0.5rem 0.75rem;
+        font-size: 0.8rem;
+    }
+
+    body.fullscreen-mode .main-header .main-heading {
+        font-size: 1.1rem;
+    }
+
+    body.fullscreen-mode #cover-art {
+        width: min(35vh, 240px); /* Even smaller for tiny screens */
+        height: min(35vh, 240px);
+        border-radius: 14px;
+    }
+
+    body.fullscreen-mode .cover-art-placeholder {
+        width: min(35vh, 240px);
+        height: min(35vh, 240px);
+        border-radius: 14px;
+    }
+
+    body.fullscreen-mode .cover-art-placeholder::before {
+        font-size: 40px;
+    }
+
+    /* Extra small: keep variables aligned to cover and tighter gap */
+    body.fullscreen-mode .cover-section {
+        --fs-cover-size: min(35vh, 240px);
+        --fs-bar-gap: 1px;
+        --fs-bar-group: 20px;
+    }
+
+    body.fullscreen-mode .cover-dancing-bars.left {
+        left: calc(50% - (var(--fs-cover-size) / 2) - var(--fs-bar-gap) - var(--fs-bar-group));
+        display: flex !important; /* Force visibility when active */
+    }
+
+    body.fullscreen-mode .cover-dancing-bars.right {
+        right: calc(50% - (var(--fs-cover-size) / 2) - var(--fs-bar-gap) - var(--fs-bar-group));
+        display: flex !important; /* Force visibility when active */
+    }
+
+    /* Ensure all 3 bars are visible in extra small mobile fullscreen */
+    body.fullscreen-mode .cover-dancing-bars.visible {
+        display: flex !important;
+        opacity: 1;
+    }
+
+    body.fullscreen-mode .cover-dancing-bars.visible .bar {
+        opacity: 1;
+        visibility: visible;
+        min-height: 6px; /* Smaller minimum for extra small screens */
+    }
+
+    body.fullscreen-mode #file-name {
+        top: 15%; /* Moved down to avoid header overlap on extra small screens */
+        font-size: 0.9rem;
     }
 
     body.fullscreen-mode .custom-player {
-        bottom: 1rem;
-        width: 95%;
+        bottom: max(0.75rem, env(safe-area-inset-bottom));
+        width: 96%;
     }
 }
 
@@ -286,6 +516,8 @@ body.fullscreen-mode .cover-dancing-bars.right {
     max-height: 70vh;
     overflow: hidden;
     color: var(--text-color);
+    /* Slightly smaller base text so modal content isn't oversized at 100% */
+    font-size: 0.95rem;
 }
 
 .queue-modal-header {
@@ -298,7 +530,8 @@ body.fullscreen-mode .cover-dancing-bars.right {
 
 .queue-modal-header h3 {
     margin: 0;
-    font-size: 1.4rem;
+    /* Prevent too-large title on desktop while staying readable */
+    font-size: clamp(1rem, 1.8vw, 1.2rem);
     font-weight: 600;
 }
 
@@ -402,7 +635,8 @@ body.fullscreen-mode .cover-dancing-bars.right {
     color: var(--text-color);
     cursor: pointer;
     padding: 0.3rem 0.5rem;
-    font-size: 0.8rem;
+    /* Keep button text compact on large screens */
+    font-size: clamp(0.75rem, 1.2vw, 0.85rem);
     transition: all 0.3s ease;
 }
 
@@ -506,6 +740,8 @@ body.fullscreen-mode .cover-dancing-bars.right {
     --shadow-color: rgba(0, 0, 0, 0.5);
     --shadow-light-color: rgba(0, 0, 0, 0.3);
     --cover-art-color: #242424; /* Fallback color for cover art */
+    /* Global UI visual scale (desktop). 1 = normal, <1 = smaller */
+    --ui-visual-scale: 0.85;
 }
 
 /* --- Universal Reset and Box-Sizing --- */
@@ -523,31 +759,60 @@ body {
     justify-content: center;
     align-items: center;
     height: 100vh;      
-    padding: 0;         
+    padding: 1rem;         
     overflow: hidden;   
     margin: 0;          
+    box-sizing: border-box;
 }
 
 
 .container {
     background-color: var(--surface-color);
-    padding: 1.8rem;
-    border-radius: 28px;
+    padding: 1.2rem;
+    border-radius: 24px;
     border: 1px solid var(--surface-border-color);
     box-shadow: 0 12px 40px var(--shadow-color);
     width: 100%;
-    max-width: 420px;
+    /* Narrow at 100% zoom, widens as viewport grows (zooming out) */
+    max-width: clamp(310px, 18vw, 560px);
     text-align: center;
     display: flex;
     flex-direction: column;
-    gap: 1.1rem;
+    gap: 0.8rem;
     backdrop-filter: blur(16px); /* Glassmorphism effect */
     -webkit-backdrop-filter: blur(16px);
     transition: background 0.5s ease; /* Smooth transition for background changes */
 }
 
+/* Desktop UI visual scale (exclude cover section) */
+@media (min-width: 600px) {
+    .main-header,
+    #file-name,
+    .custom-player,
+    .controls-section {
+        zoom: var(--ui-visual-scale);
+    }
+    /* Also scale the queue modal overlay */
+    .queue-modal-content { zoom: var(--ui-visual-scale); }
+}
+
+/* Keep natural size on mobile */
+@media (max-width: 600px) {
+    .main-header,
+    #file-name,
+    .custom-player,
+    .controls-section,
+    .queue-modal-content { zoom: 1; }
+}
+
+/* Keep natural size in fullscreen */
+body.fullscreen-mode .main-header,
+body.fullscreen-mode .custom-player,
+body.fullscreen-mode #file-name,
+body.fullscreen-mode .queue-modal-content { zoom: 1; }
+
 .main-heading {
-    font-size: 60px;
+    font-size: 48px;
     font-weight: 700;
     margin: 0;
     background: linear-gradient(90deg, 
@@ -560,11 +825,11 @@ body {
 }
 
 #cover-art {
-    width: 220px;
-    height: 220px;
+    width: 280px;
+    height: 280px;
     margin: 0 auto;
-    border-radius: 16px;
-    box-shadow: 0 8px 25px var(--shadow-light-color);
+    border-radius: 18px;
+    box-shadow: 0 12px 35px var(--shadow-light-color);
     object-fit: cover;
     transition: opacity 0.4s ease, transform 0.2s ease-out;
     border: 1px solid var(--surface-border-color);
@@ -575,7 +840,6 @@ body {
     -khtml-user-drag: none;
     -moz-user-drag: none;
     -o-user-drag: none;
-    user-drag: none;
     user-select: none;
     -webkit-user-select: none;
     -moz-user-select: none;
@@ -584,16 +848,16 @@ body {
 
 /* Cover Art Placeholder for when no cover art is available */
 .cover-art-placeholder {
-    width: 260px;
-    height: 260px;
+    width: 280px;
+    height: 280px;
     margin: 0 auto;
-    border-radius: 20px;
+    border-radius: 18px;
     background: linear-gradient(135deg, 
         rgba(255, 255, 255, 0.1) 0%,
         rgba(255, 255, 255, 0.05) 50%,
         rgba(255, 255, 255, 0.02) 100%);
     border: 1px solid var(--surface-border-color);
-    box-shadow: 0 10px 32px var(--shadow-light-color);
+    box-shadow: 0 12px 35px var(--shadow-light-color);
     display: none; /* Hidden by default */
     position: relative;
     backdrop-filter: blur(10px);
@@ -618,7 +882,7 @@ body {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    font-size: 48px;
+    font-size: 50px;
     opacity: 0.6;
     color: var(--text-muted-color);
     transition: color 0.5s ease;
@@ -759,14 +1023,14 @@ audio#player {
 .controls-section {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 0.6rem;
 }
 
 .upload-wrapper, .sync-wrapper {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 1rem;
+    gap: 0.6rem;
 }
 
 .control-button {
@@ -774,10 +1038,10 @@ audio#player {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 0.75rem;
-    padding: 0.9rem 1.5rem;
+    gap: 0.4rem;
+    padding: 0.5rem 0.8rem;
     border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 16px;
+    border-radius: 12px;
     background: linear-gradient(135deg, 
         rgba(255, 255, 255, 0.1) 0%,
         rgba(255, 255, 255, 0.05) 50%,
@@ -785,11 +1049,11 @@ audio#player {
     backdrop-filter: blur(20px) saturate(180%);
     -webkit-backdrop-filter: blur(20px) saturate(180%);
     box-shadow: 
-        0 8px 32px 0 rgba(31, 38, 135, 0.37),
+        0 6px 24px 0 rgba(31, 38, 135, 0.32),
         inset 0 1px 0 0 rgba(255, 255, 255, 0.1),
         inset 0 -1px 0 0 rgba(255, 255, 255, 0.05);
-    color: #ffffff;
-    font-size: 1rem;
+    color: #fff;
+    font-size: 0.8rem;
     font-weight: 600;
     cursor: pointer;
     position: relative;
@@ -808,7 +1072,7 @@ audio#player {
         rgba(255, 255, 255, 0.08) 0%,
         transparent 50%,
         rgba(255, 255, 255, 0.03) 100%);
-    border-radius: 16px;
+    border-radius: 14px;
     pointer-events: none;
     opacity: 0;
     transition: opacity 0.3s ease;
@@ -852,18 +1116,20 @@ audio#player {
 .custom-player {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    padding: 1rem 1.2rem;
+    gap: 0.3rem;
+    padding: 0.6rem 0.8rem;
+    width: 100%;
+    box-sizing: border-box;
     background: linear-gradient(135deg, 
         rgba(255, 255, 255, 0.1) 0%,
         rgba(255, 255, 255, 0.05) 50%,
         rgba(255, 255, 255, 0.02) 100%);
-    border-radius: 28px;
+    border-radius: 20px;
     border: 1px solid rgba(255, 255, 255, 0.18);
     backdrop-filter: blur(24px) saturate(180%);
     -webkit-backdrop-filter: blur(24px) saturate(180%);
     box-shadow: 
-        0 12px 40px 0 rgba(31, 38, 135, 0.37),
+        0 8px 28px 0 rgba(31, 38, 135, 0.32),
         inset 0 1px 0 0 rgba(255, 255, 255, 0.1),
         inset 0 -1px 0 0 rgba(255, 255, 255, 0.05);
     position: relative;
@@ -917,7 +1183,17 @@ audio#player {
     align-items: center;
     gap: 1rem;
     justify-content: center; /* Center the control buttons */
+    flex-wrap: nowrap; /* Prevent wrapping */
+    min-width: 0; /* Allow flex children to shrink */
 }
+
+/* Keep play button centered between previous and next on all screens */
+.main-player-row #shuffle-btn { order: 0; }
+.main-player-row #prev-btn { order: 1; }
+.main-player-row #play-pause-btn { order: 2; }
+.main-player-row #next-btn { order: 3; }
+.main-player-row #loop-btn { order: 4; }
+.main-player-row .volume-control { order: 5; }
 
 .progress-bar-container {
     width: 100%; /* Full width when it's its own row */
@@ -1020,6 +1296,15 @@ audio#player {
 
 .player-btn i {
     font-size: 1.2rem;
+}
+
+.play-btn-large {
+    width: 56px !important;
+    height: 56px !important;
+}
+
+.play-btn-large i {
+    font-size: 1.4rem !important;
 }
 
 .volume-control {
@@ -1162,34 +1447,196 @@ audio#player {
 
 /* Responsive adjustments for custom player */
 @media (max-width: 600px) {
-    .container {
-        max-width: 95vw;
+    body {
+        height: 100vh;
+        height: 100svh; /* Use small viewport height for better mobile support */
+        min-height: 100vh; /* Fallback for browsers that don't support svh */
+    overflow-y: auto; /* Allow vertical scrolling on mobile */
+    overflow-x: hidden; /* Prevent horizontal scroll from popups/wraps */
         padding: 0.5rem;
-        border-radius: 12px;
-        gap: 0.3rem;
+        align-items: flex-start; /* Align to top instead of center */
+        padding-top: max(0.5rem, env(safe-area-inset-top)); /* Account for notches */
+        padding-bottom: max(0.5rem, env(safe-area-inset-bottom)); /* Account for home indicator */
     }
+    /* Keep bars close to the cover image on mobile and reliably clip overflow */
+    .cover-section { 
+        overflow: hidden;
+        overflow: clip; /* Better clipping in modern browsers */
+        contain: layout paint; /* Isolate painting to prevent leaks */
+        perspective: none; /* Avoid clipping issues with 3D context on some mobiles */
+        --cover-size: 220px; 
+        --bar-gap: 8px; 
+        --bar-group-width: 15px; /* 3 bars (3px) + 2 gaps (3px) */
+    }
+    
+    .container {
+        max-width: min(94vw, 360px); /* Scale with screen, cap for readability */
+        padding: 0.8rem;
+        border-radius: 16px;
+        gap: 0.6rem;
+        margin: auto 0; /* Center vertically when there's space */
+        max-height: none; /* Remove any height constraints */
+    }
+    
+    .custom-player {
+        padding: 0.6rem;
+        gap: 0.4rem;
+        border-radius: 16px;
+    }
+    
+    .main-heading {
+        font-size: 28px;
+    }
+    
+    #cover-art, .cover-art-placeholder {
+        width: 220px;
+        height: 220px;
+    }
+    
+    .main-player-row {
+        gap: 0.4rem;
+        flex-wrap: wrap; /* Allow wrapping on narrow screens */
+        justify-content: center;
+        align-items: center;
+    }
+    /* Keep child items flexible when wrapping */
+    .main-player-row > * { min-width: 0; }
+    
+    .player-btn {
+    width: 36px;
+    height: 36px;
+    }
+    
+    .play-btn-large { width: 44px !important; height: 44px !important; }
+    .player-btn i { font-size: 0.95rem; }
+    .play-btn-large i { font-size: 1.05rem !important; }
+    .volume-btn { width: 28px; height: 28px; }
+    
+    .volume-slider-vertical {
+        height: 60px;
+    }
+    
+    .sync-wrapper { 
+        flex-direction: column; 
+        align-items: stretch; 
+        gap: 0.6rem; 
+    }
+    
+    .delay-control { 
+        justify-content: center; 
+    }
+    
+    /* Use variable-based positioning so bars stay inside and aligned */
+    .cover-dancing-bars.left {
+        left: calc(50% - (var(--cover-size) / 2) - var(--bar-gap) - var(--bar-group-width));
+    }
+    .cover-dancing-bars.right {
+        right: calc(50% - (var(--cover-size) / 2) - var(--bar-gap) - var(--bar-group-width));
+    }
+}
+
+/* Extra small mobile devices */
+@media (max-width: 400px) {
+    body {
+        padding: 0.25rem;
+        padding-top: max(0.25rem, env(safe-area-inset-top));
+        padding-bottom: max(0.25rem, env(safe-area-inset-bottom));
+    }
+    /* Extra small screens: smaller cover, keep bars snug and clipped */
+    .cover-section { 
+        overflow: hidden;
+        overflow: clip;
+        contain: layout paint;
+        perspective: none;
+        --cover-size: 140px; 
+        --bar-gap: 6px; 
+        --bar-group-width: 15px; 
+    }
+    
+    .container {
+        padding: 0.6rem;
+        gap: 0.5rem;
+        border-radius: 12px;
+    }
+    
+    .main-heading {
+        font-size: 24px;
+    }
+    
+    #cover-art, .cover-art-placeholder {
+        width: 140px;
+        height: 140px;
+    }
+    
     .custom-player {
         padding: 0.5rem;
         gap: 0.3rem;
-        border-radius: 12px;
     }
-    .main-heading {
-        font-size: 22px;
-    }
-    .main-player-row {
-        gap: 0.5rem;
-    }
+    
     .player-btn {
         width: 36px;
         height: 36px;
     }
+    
     .volume-btn {
         width: 28px;
         height: 28px;
     }
-    .volume-slider-vertical {
-        height: 40px;
+    
+    /* Use variable-based positioning for extra small screens as well */
+    .cover-dancing-bars.left {
+        left: calc(50% - (var(--cover-size) / 2) - var(--bar-gap) - var(--bar-group-width));
     }
+    .cover-dancing-bars.right {
+        right: calc(50% - (var(--cover-size) / 2) - var(--bar-gap) - var(--bar-group-width));
+    }
+}
+
+/* Desktop-only fullscreen refinements: smaller file status, cover, controls */
+@media (min-width: 1024px) {
+    /* Reduce cover section footprint */
+    body.fullscreen-mode .cover-section {
+        max-width: 520px;
+        padding: 0;
+    /* Match bar positioning to PC fullscreen cover size and tighten gap */
+    --fs-cover-size: min(45vh, 360px);
+    --fs-bar-gap: 15px; /* closer to cover */
+    --fs-bar-group: 30px;
+    }
+
+    body.fullscreen-mode #cover-art,
+    body.fullscreen-mode .cover-art-placeholder {
+        width: min(45vh, 340px);
+        height: min(45vh, 340px);
+        border-radius: 16px;
+    }
+
+    /* Make file status text a bit smaller and closer to cover */
+    body.fullscreen-mode #file-name {
+        top: 18%;
+        font-size: 0.75rem;
+        max-width: 520px;
+    }
+
+    /* Compact controls area */
+    body.fullscreen-mode .custom-player {
+        bottom: 1.5rem;
+        width: 85%;
+        max-width: 520px;
+        min-height: 56px;
+        padding: 0.6rem 0.8rem;
+    }
+
+    body.fullscreen-mode .player-time-display { font-size: 0.85rem; }
+    body.fullscreen-mode .progress-bar-container { height: 16px; }
+    body.fullscreen-mode .progress-bar { height: 6px; }
+
+    /* Smaller controls */
+    body.fullscreen-mode .player-btn { width: 44px; height: 44px; }
+    body.fullscreen-mode .play-btn-large { width: 52px !important; height: 52px !important; }
+    body.fullscreen-mode .player-btn i { font-size: 1rem; }
+    body.fullscreen-mode .play-btn-large i { font-size: 1.15rem !important; }
+    body.fullscreen-mode .volume-btn { width: 34px; height: 34px; }
 }
 
 
@@ -1200,9 +1647,13 @@ audio#player {
     justify-content: center;
     align-items: center;
     width: 100%;
-    padding: 0 50px; /* Add padding to ensure bars stay inside container */
+    padding: 0 16px; /* Keep a little padding so bars stay inside */
     /* Establishes the 3D perspective for child elements */
     perspective: 1200px;
+    /* Variables to drive bar positioning relative to cover size */
+    --cover-size: 280px;          /* matches #cover-art default width */
+    --bar-gap: 10px;              /* space between image and bars */
+    --bar-group-width: 15px;      /* 3 bars (3px each) + 2 gaps (3px each) */
 }
 
 .cover-dancing-bars {
@@ -1217,11 +1668,11 @@ audio#player {
 }
 
 .cover-dancing-bars.left {
-    left: calc(50% - 110px - 10px - 15px); /* Center minus half image width minus gap minus bar group width */
+    left: calc(50% - (var(--cover-size) / 2) - var(--bar-gap) - var(--bar-group-width));
 }
 
 .cover-dancing-bars.right {
-    right: calc(50% - 110px - 10px - 15px); /* Center minus half image width minus gap minus bar group width */
+    right: calc(50% - (var(--cover-size) / 2) - var(--bar-gap) - var(--bar-group-width));
 }
 
 .cover-dancing-bars.visible {
@@ -1251,22 +1702,6 @@ audio#player {
 
 #file-name.playing #file-name-text {
     color: var(--text-color);
-}
-
-/* Responsive adjustments */
-@media (max-width: 600px) {
-    /* No body changes needed due to box-sizing */
-    .container { 
-        padding: 1.5rem; 
-        gap: 1rem; 
-    }
-    .main-heading { font-size: 30px; }
-    .sync-wrapper { 
-        flex-direction: column; 
-        align-items: stretch; 
-        gap: 0.8rem; 
-    }
-    .delay-control { justify-content: center; }
 }
 
 /* --- Room Selection Page --- */
@@ -1427,4 +1862,174 @@ audio#player {
         0 6px 24px 0 rgba(31, 38, 135, 0.4),
         inset 0 1px 0 0 rgba(255, 255, 255, 0.12),
         inset 0 -1px 0 0 rgba(255, 255, 255, 0.06);
+}
+
+/* Desktop media query - larger screens */
+@media (min-width: 600px) {
+    /* Container width uses base clamp; no override here */
+    
+    .main-player-row {
+        gap: 0.8rem; /* Reduced gap to fit better */
+        flex-wrap: nowrap; /* Ensure no wrapping on desktop */
+    }
+    
+    .custom-player {
+        padding: 1rem 1rem; /* Balanced padding */
+        width: 100%;
+        box-sizing: border-box;
+    }
+    
+    /* Ensure buttons use their default desktop size, not mobile override */
+    .player-btn {
+        width: 48px;
+        height: 48px;
+        flex-shrink: 0;
+    }
+
+    .play-btn-large {
+        width: 68px;
+        height: 68px;
+        flex-shrink: 0;
+        z-index: 1;
+    }
+    
+    .volume-btn {
+        width: 40px;
+        height: 40px;
+        flex-shrink: 0;
+    }
+    
+    .volume-control {
+        flex-shrink: 0; /* Prevent volume control from shrinking */
+    }
+}
+
+/* Additional breakpoint for smaller desktop windows */
+@media (min-width: 480px) and (max-width: 599px) {
+    /* Container width uses base clamp; no override here */
+    
+    .main-player-row {
+        gap: 0.6rem;
+        flex-wrap: nowrap;
+    }
+    
+    .custom-player {
+        padding: 0.8rem;
+    }
+    
+    .player-btn {
+        width: 42px;
+        height: 42px;
+        flex-shrink: 0;
+    }
+
+    .play-btn-large {
+        width: 54px;
+        height: 54px;
+        flex-shrink: 0;
+        z-index: 1;
+    }
+    
+    .volume-btn {
+        width: 38px;
+        height: 38px;
+        flex-shrink: 0;
+    }
+}
+
+/* Desktop height-based adjustments so everything fits at 100% zoom on shorter displays */
+@media (min-width: 768px) and (max-height: 900px) {
+    body { padding: 0.5rem; }
+    .container {
+        max-height: calc(100vh - 2rem);
+        overflow-y: auto;
+        padding: 0.8rem;
+        gap: 0.6rem;
+    }
+    /* Keep dancing bars tight to the resized cover */
+    .cover-section { --cover-size: 200px; --bar-gap: 10px; --bar-group-width: 15px; }
+    .main-heading { font-size: 32px; }
+    #cover-art, .cover-art-placeholder { width: 200px; height: 200px; }
+    .main-player-row { gap: 0.6rem; }
+    .player-btn { width: 42px; height: 42px; }
+    .play-btn-large { width: 58px; height: 58px; }
+    .volume-btn { width: 34px; height: 34px; }
+    .custom-player { padding: 0.7rem 0.7rem; gap: 0.35rem; }
+    .cover-section { padding: 0 24px; }
+    .player-time-display { font-size: 0.75rem; margin-bottom: 0.18rem; }
+    .progress-bar-container { height: 14px; margin-bottom: 0.22rem; }
+    .progress-bar { height: 5px; }
+    #file-name { padding: 0.32rem 0; font-size: 0.9rem; }
+    .room-header-controls { margin-top: 0.25rem; }
+    .player-btn i { font-size: 0.98rem; }
+    .play-btn-large i { font-size: 1.1rem !important; }
+    .volume-btn i { font-size: 0.85rem; }
+    .control-button { font-size: 0.88rem; }
+    .control-button i { font-size: 0.9rem; }
+    .room-code-display { font-size: 0.82rem; }
+    .member-count { font-size: 0.82rem; }
+    .create-new-room-button, .exit-room-button { font-size: 16px; }
+    .delay-control { padding: 0.4rem 0.7rem; gap: 0.45rem; font-size: 0.88rem; }
+}
+
+@media (min-width: 768px) and (max-height: 800px) {
+    body { padding: 0.4rem; }
+    .container { padding: 0.7rem; gap: 0.5rem; }
+    .main-heading { font-size: 30px; }
+    #cover-art, .cover-art-placeholder { width: 180px; height: 180px; }
+    /* Match bar positioning to 180px cover */
+    .cover-section { --cover-size: 180px; --bar-gap: 10px; --bar-group-width: 15px; }
+    .player-btn { width: 38px; height: 38px; }
+    .play-btn-large { width: 54px; height: 54px; }
+    .volume-btn { width: 30px; height: 30px; }
+    .custom-player { padding: 0.6rem; }
+    .progress-bar-container { height: 12px; margin-bottom: 0.2rem; }
+    .progress-bar { height: 4px; }
+    .player-time-display { font-size: 0.72rem; margin-bottom: 0.12rem; }
+    #file-name { padding: 0.28rem 0; font-size: 0.88rem; }
+    .cover-section { padding: 0 20px; }
+    .player-btn i { font-size: 0.95rem; }
+    .play-btn-large i { font-size: 1.05rem !important; }
+    .volume-btn i { font-size: 0.8rem; }
+    .control-button { font-size: 0.84rem; }
+    .control-button i { font-size: 0.85rem; }
+    .room-code-display, .member-count { font-size: 0.78rem; }
+    .create-new-room-button, .exit-room-button { font-size: 14px; }
+    .delay-control { padding: 0.36rem 0.65rem; gap: 0.42rem; font-size: 0.86rem; }
+}
+
+@media (min-width: 768px) and (max-height: 720px) {
+    body { padding: 0.35rem; }
+    .container { padding: 0.6rem; gap: 0.45rem; }
+    .main-heading { font-size: 28px; }
+    #cover-art, .cover-art-placeholder { width: 160px; height: 160px; }
+    /* Match bar positioning to 160px cover */
+    .cover-section { --cover-size: 160px; --bar-gap: 10px; --bar-group-width: 15px; }
+    .main-player-row { gap: 0.5rem; }
+    .player-btn { width: 36px; height: 36px; }
+    .play-btn-large { width: 50px; height: 50px; }
+    .custom-player { padding: 0.5rem; gap: 0.3rem; }
+    .progress-bar-container { height: 12px; margin-bottom: 0.18rem; }
+    .progress-bar { height: 4px; }
+    .player-time-display { font-size: 0.7rem; margin-bottom: 0.1rem; }
+    #file-name { padding: 0.26rem 0; font-size: 0.86rem; }
+    .cover-section { padding: 0 16px; }
+    .player-btn i { font-size: 0.9rem; }
+    .play-btn-large i { font-size: 1rem !important; }
+    .volume-btn i { font-size: 0.78rem; }
+    .control-button { font-size: 0.8rem; }
+    .control-button i { font-size: 0.82rem; }
+    .room-code-display, .member-count { font-size: 0.75rem; }
+    .create-new-room-button, .exit-room-button { font-size: 13px; }
+    .delay-control { padding: 0.32rem 0.6rem; gap: 0.38rem; font-size: 0.84rem; }
+}
+
+/* Very small phones: squeeze controls a bit more */
+@media (max-width: 360px) {
+    .player-btn { width: 34px; height: 34px; }
+    .play-btn-large { width: 40px !important; height: 40px !important; }
+    .player-btn i { font-size: 0.9rem; }
+    .play-btn-large i { font-size: 1rem !important; }
+    .volume-btn { width: 26px; height: 26px; }
+    .main-player-row { gap: 0.35rem; }
 }
