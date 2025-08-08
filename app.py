@@ -36,6 +36,8 @@ app = Flask(__name__, static_url_path='/static')
 app.config['SECRET_KEY'] = 'secret!'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['JSON_AS_ASCII'] = False  # Ensure Unicode characters are not escaped in JSON responses
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 31536000  # Cache static files for 1 year
 
 redis_url = os.environ.get('REDIS_URL')
 socketio = SocketIO(
@@ -80,7 +82,6 @@ def extract_cover_art(file_path):
     try:
         audio = MutagenFile(file_path)
         if not audio:
-            print(f"[DEBUG] Mutagen could not open file: {file_path}")
             return None, None
 
         # MP4/M4A Files
@@ -89,14 +90,12 @@ def extract_cover_art(file_path):
                 covers = audio.tags['covr']
                 if covers:
                     ext = 'png' if covers[0].imageformat == MP4Cover.FORMAT_PNG else 'jpg'
-                    print(f"[DEBUG] MP4 cover found, ext={ext}")
                     return covers[0], ext
 
         # FLAC Files
         if hasattr(audio, 'pictures') and audio.pictures:
             pic = audio.pictures[0]
             ext = 'png' if 'png' in pic.mime else 'jpg'
-            print(f"[DEBUG] FLAC cover found, ext={ext}")
             return pic.data, ext
 
         # MP3 Files (ID3 Tags)
@@ -106,27 +105,22 @@ def extract_cover_art(file_path):
                 if tag.startswith('APIC'):
                     pic = audio.tags[tag]
                     ext = 'png' if 'png' in pic.mime else 'jpg'
-                    print(f"[DEBUG] MP3 APIC cover found, ext={ext}")
                     return pic.data, ext
                 if tag.startswith('PIC'):
                     pic = audio.tags[tag]
                     ext = 'png' if 'png' in pic.mime else 'jpg'
-                    print(f"[DEBUG] MP3 PIC cover found, ext={ext}")
                     return pic.data, ext
 
         # Direct attribute fallback for some formats
         if hasattr(audio, 'APIC'):
             pic = audio.APIC
             ext = 'png' if 'png' in pic.mime else 'jpg'
-            print(f"[DEBUG] Direct APIC cover found, ext={ext}")
             return pic.data, ext
         if hasattr(audio, 'PIC'):
             pic = audio.PIC
             ext = 'png' if 'png' in pic.mime else 'jpg'
-            print(f"[DEBUG] Direct PIC cover found, ext={ext}")
             return pic.data, ext
 
-        print(f"[DEBUG] No cover art found in file: {file_path}")
     except Exception as e:
         print(f"Could not extract cover art from {os.path.basename(file_path)}: {e}")
     return None, None
@@ -153,16 +147,10 @@ def serve_file(filename):
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    """Handle audio file uploads with robust error handling and cloud storage support."""
-    print(f"[DEBUG] Upload endpoint called. Upload folder: {app.config['UPLOAD_FOLDER']}")
-    print(f"[DEBUG] Upload folder exists: {os.path.exists(app.config['UPLOAD_FOLDER'])}")
-    
+    """Handle audio file uploads with optimized performance."""
     room = request.form.get('room')
-    print(f"[DEBUG] Room from request: {room}")
-    print(f"[DEBUG] Available rooms: {list(rooms_data.keys())}")
     
     if not room or room not in rooms_data:
-        print(f"[ERROR] Invalid room: {room}")
         return jsonify({'success': False, 'error': 'Invalid or expired room'}), 400
         
     if 'audio' not in request.files:
@@ -173,69 +161,37 @@ def upload():
         return jsonify({'success': False, 'error': 'File not allowed or not selected'}), 400
 
     try:
-        from werkzeug.utils import secure_filename
         import re
-        # Ensure filename is not None before processing
         original_filename = file.filename
         if not original_filename:
             return jsonify({'success': False, 'error': 'Invalid filename'}), 400
         
-        print(f"[DEBUG] Original filename: {repr(original_filename)}")
-        print(f"[DEBUG] Original filename type: {type(original_filename)}")
-        print(f"[DEBUG] Original filename length: {len(original_filename) if original_filename else 'None'}")
-        
-        # Test Unicode characters in original filename
-        if original_filename:
-            japanese_chars = [c for c in original_filename if ord(c) > 127]
-            print(f"[DEBUG] Non-ASCII characters in original: {repr(japanese_chars)}")
-        
         # Use a custom secure filename function that preserves Unicode characters
         def unicode_secure_filename(filename):
             # Remove path separators and other dangerous characters but keep Unicode
-            print(f"[DEBUG] unicode_secure_filename input: {repr(filename)}")
             filename = re.sub(r'[/\\]', '', filename)  # Remove path separators
             filename = re.sub(r'[<>:"|?*]', '', filename)  # Remove Windows forbidden chars
             filename = filename.strip()  # Remove leading/trailing whitespace
             filename = re.sub(r'\s+', ' ', filename)  # Normalize whitespace
-            print(f"[DEBUG] unicode_secure_filename output: {repr(filename)}")
             return filename if filename else None
         
         filename = unicode_secure_filename(original_filename)
-        print(f"[DEBUG] Unicode secure filename: {repr(filename)}")
-        print(f"[DEBUG] Unicode secure filename type: {type(filename)}")
-        
-        # Test Unicode preservation
-        if filename:
-            japanese_chars = [c for c in filename if ord(c) > 127]
-            print(f"[DEBUG] Non-ASCII characters preserved: {repr(japanese_chars)}")
         
         if not filename:  # If filename is still empty, generate a random one
             filename = f"audio_{uuid.uuid4().hex[:8]}.mp3"
-            print(f"[DEBUG] Generated fallback filename: {filename}")
             
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         
-        # Ensure upload directory exists with proper error handling
-        try:
-            os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-            print(f"[DEBUG] Upload directory ensured: {app.config['UPLOAD_FOLDER']}")
-        except Exception as mkdir_error:
-            print(f"[ERROR] Failed to create upload directory: {mkdir_error}")
-            return jsonify({'success': False, 'error': f'Directory creation failed: {str(mkdir_error)}'}), 500
+        # Ensure upload directory exists
+        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
         
-        # Save file with error handling
-        try:
-            file.save(file_path)
-            print(f"[DEBUG] File saved successfully: {file_path}")
-        except Exception as save_error:
-            print(f"[ERROR] Failed to save file: {save_error}")
-            return jsonify({'success': False, 'error': f'File save failed: {str(save_error)}'}), 500
-        print(f"[Room {room}] - File saved: {filename} (Original: {original_filename})")
+        # Save file
+        file.save(file_path)
+        print(f"[Room {room}] - File saved: {filename}")
 
         final_cover_filename = None
-        # --- Using the new, robust helper function ---
+        # Extract cover art
         cover_data, cover_ext = extract_cover_art(file_path)
-        print(f"[DEBUG] Cover extraction result for '{filename}': cover_data={'YES' if cover_data else 'NO'}, cover_ext={cover_ext}")
 
         if cover_data:
             cover_filename = f"{os.path.splitext(filename)[0]}_cover.{cover_ext}"
@@ -243,12 +199,9 @@ def upload():
             with open(cover_path, 'wb') as imgf:
                 imgf.write(cover_data)
             final_cover_filename = cover_filename
-            print(f"[Room {room}] - Cover art successfully extracted and saved as '{final_cover_filename}'.")
-            print(f"[DEBUG] Cover file saved at: {cover_path}")
-            print(f"[DEBUG] Cover file exists after save: {os.path.exists(cover_path)}")
+            print(f"[Room {room}] - Cover art extracted.")
         else:
-            print(f"[Room {room}] - No cover art found or extracted.")
-        print(f"[DEBUG] Emitting new_file event with cover: {final_cover_filename}")
+            print(f"[Room {room}] - No cover art found.")
             
         with thread_lock:
             # Create audio item for queue
@@ -286,7 +239,6 @@ def upload():
                     'filename_display': original_filename,
                     'cover': final_cover_filename
                 }
-                print(f"[DEBUG] About to emit new_file with data: {repr(emit_data)}")
                 socketio.emit('new_file', emit_data, to=room)
                 socketio.emit('pause', {'time': 0}, to=room)
             
@@ -296,14 +248,10 @@ def upload():
                 'current_index': rooms_data[room]['current_index']
             }, to=room)
         
-        print(f"[DEBUG] Filename being sent in JSON response: {repr(filename)}")
         return jsonify({'success': True, 'filename': filename, 'filename_display': original_filename})
 
     except Exception as e:
-        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-        print(f"CRITICAL ERROR during file upload for room '{room}':")
-        traceback.print_exc()
-        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        print(f"ERROR during file upload for room '{room}': {str(e)}")
         return jsonify({
             'success': False,
             'error': f'Upload failed: {str(e)}'
@@ -465,7 +413,9 @@ def create_room():
         'last_updated_at': time.time(),
         'members': 0,  # Initialize member count
         'queue': [],  # Initialize queue for multiple audio files
-        'current_index': -1  # Index of currently playing song in queue
+        'current_index': -1,  # Index of currently playing song in queue
+        'is_shuffling': False,  # Shuffle state
+        'isLooping': False  # Loop state synchronized across devices
     }
     print(f"New room created: {room_id}")
     return redirect(url_for('player_room', room_id=room_id))
@@ -554,6 +504,9 @@ def on_disconnect():
                          # Clear the queue when room is empty
                          rooms_data[room_id]['queue'] = []
                          rooms_data[room_id]['current_index'] = -1
+                         # Reset shuffle and loop states
+                         rooms_data[room_id]['is_shuffling'] = False
+                         rooms_data[room_id]['isLooping'] = False
 
 @socketio.on('client_ping')
 def handle_client_ping():
@@ -622,9 +575,173 @@ def handle_sync(data):
 
 @socketio.on('next_song')
 def handle_next_song(data):
-    """Play the next song in the queue."""
+    """Play the next song in the queue, considering shuffle mode."""
     room = data.get('room')
-    auto_play = data.get('auto_play', False)  # Check if this is auto-triggered
+    auto_play = True  # Always auto-play on next
+
+    if room not in rooms_data:
+        return
+
+    with thread_lock:
+        queue = rooms_data[room].get('queue', [])
+        current_index = rooms_data[room].get('current_index', -1)
+        is_shuffling = rooms_data[room].get('is_shuffling', False)
+
+        if len(queue) == 0:
+            return
+
+        # Determine next index based on shuffle mode
+        if is_shuffling and len(queue) > 1:
+            import random
+            available_indices = [i for i in range(len(queue)) if i != current_index]
+            next_index = random.choice(available_indices) if available_indices else 0
+        else:
+            next_index = current_index + 1
+            if next_index >= len(queue):
+                next_index = 0
+
+        audio_item = queue[next_index]
+        rooms_data[room].update({
+            'current_file': audio_item['filename'],
+            'current_file_display': audio_item['filename_display'],
+            'current_cover': audio_item['cover'],
+            'current_index': next_index,
+            'is_playing': auto_play,
+            'last_progress_s': 0,
+            'last_updated_at': time.time(),
+        })
+
+    emit_data = {
+        'filename': audio_item['filename'],
+        'filename_display': audio_item['filename_display'],
+        'cover': audio_item['cover']
+    }
+    socketio.emit('new_file', emit_data, to=room)
+
+    # Always auto-play
+    target_timestamp = time.time() + 0.5
+    socketio.emit('scheduled_play', {
+        'audio_time': 0,
+        'target_timestamp': target_timestamp
+    }, to=room)
+
+    socketio.emit('queue_update', {
+        'queue': queue,
+        'current_index': next_index
+    }, to=room)
+
+@socketio.on('previous_song')
+def handle_previous_song(data):
+    """Play the previous song in the queue."""
+    room = data.get('room')
+    auto_play = True  # Always auto-play on previous
+
+    if room not in rooms_data:
+        return
+
+    with thread_lock:
+        queue = rooms_data[room].get('queue', [])
+        current_index = rooms_data[room].get('current_index', -1)
+
+        if len(queue) == 0:
+            return
+
+        prev_index = current_index - 1
+        if prev_index < 0:
+            prev_index = len(queue) - 1
+
+        audio_item = queue[prev_index]
+        rooms_data[room].update({
+            'current_file': audio_item['filename'],
+            'current_file_display': audio_item['filename_display'],
+            'current_cover': audio_item['cover'],
+            'current_index': prev_index,
+            'is_playing': auto_play,
+            'last_progress_s': 0,
+            'last_updated_at': time.time(),
+        })
+
+    emit_data = {
+        'filename': audio_item['filename'],
+        'filename_display': audio_item['filename_display'],
+        'cover': audio_item['cover']
+    }
+    socketio.emit('new_file', emit_data, to=room)
+
+    # Always auto-play
+    target_timestamp = time.time() + 0.5
+    socketio.emit('scheduled_play', {
+        'audio_time': 0,
+        'target_timestamp': target_timestamp
+    }, to=room)
+
+    socketio.emit('queue_update', {
+        'queue': queue,
+        'current_index': prev_index
+    }, to=room)
+
+@socketio.on('loop_toggle')
+def handle_loop_toggle(data):
+    """Handle loop state toggle and synchronize across all devices."""
+    room = data.get('room')
+    is_looping = data.get('isLooping', False)
+    
+    if room not in rooms_data:
+        return
+        
+    with thread_lock:
+        rooms_data[room]['isLooping'] = is_looping
+        
+    print(f"[Room {room}] Loop state changed to: {is_looping}")
+    
+    # Broadcast loop state to all devices in the room
+    socketio.emit('loop_state_update', {
+        'isLooping': is_looping
+    }, to=room)
+
+@socketio.on('loop_restart')
+def handle_loop_restart(data):
+    """Handle loop restart and synchronize across all devices."""
+    room = data.get('room')
+    
+    if room not in rooms_data:
+        return
+        
+    with thread_lock:
+        # Reset progress and ensure playing state
+        rooms_data[room]['last_progress_s'] = 0
+        rooms_data[room]['is_playing'] = True
+        rooms_data[room]['last_updated_at'] = time.time()
+    
+    print(f"[Room {room}] Loop restart triggered")
+    
+    # Broadcast loop restart to all devices
+    socketio.emit('loop_restart', {}, to=room)
+
+@socketio.on('shuffle_toggle')
+def handle_shuffle_toggle(data):
+    """Handle shuffle state toggle and synchronize across all devices."""
+    room = data.get('room')
+    is_shuffling = data.get('isShuffling', False)
+    
+    if room not in rooms_data:
+        return
+        
+    with thread_lock:
+        rooms_data[room]['is_shuffling'] = is_shuffling
+        
+    print(f"[Room {room}] Shuffle state changed to: {is_shuffling}")
+    
+    # Broadcast shuffle state to all devices in the room
+    socketio.emit('shuffle_state_update', {
+        'isShuffling': is_shuffling
+    }, to=room)
+
+@socketio.on('shuffle_next')
+def handle_shuffle_next(data):
+    """Play a random song from the queue when shuffle is enabled."""
+    room = data.get('room')
+    auto_play = data.get('auto_play', False)
     
     if room not in rooms_data:
         return
@@ -633,24 +750,30 @@ def handle_next_song(data):
         queue = rooms_data[room].get('queue', [])
         current_index = rooms_data[room].get('current_index', -1)
         
-        if len(queue) == 0:
+        if len(queue) <= 1:
+            return  # Can't shuffle with 0 or 1 songs
+            
+        # Generate a random index different from current
+        import random
+        available_indices = [i for i in range(len(queue)) if i != current_index]
+        if not available_indices:
             return
             
-        next_index = current_index + 1
-        if next_index >= len(queue):
-            next_index = 0  # Loop back to start
-            
+        random_index = random.choice(available_indices)
+        
         # Update current song
-        audio_item = queue[next_index]
+        audio_item = queue[random_index]
         rooms_data[room].update({
             'current_file': audio_item['filename'],
             'current_file_display': audio_item['filename_display'],
             'current_cover': audio_item['cover'],
-            'current_index': next_index,
-            'is_playing': auto_play,  # Set playing state based on auto_play
+            'current_index': random_index,
+            'is_playing': auto_play,
             'last_progress_s': 0,
             'last_updated_at': time.time(),
         })
+    
+    print(f"[Room {room}] Shuffle: Playing random song at index {random_index}")
     
     # Emit new song to all clients
     emit_data = {
@@ -674,52 +797,7 @@ def handle_next_song(data):
     # Update queue status
     socketio.emit('queue_update', {
         'queue': queue,
-        'current_index': next_index
-    }, to=room)
-
-@socketio.on('previous_song')
-def handle_previous_song(data):
-    """Play the previous song in the queue."""
-    room = data.get('room')
-    if room not in rooms_data:
-        return
-        
-    with thread_lock:
-        queue = rooms_data[room].get('queue', [])
-        current_index = rooms_data[room].get('current_index', -1)
-        
-        if len(queue) == 0:
-            return
-            
-        prev_index = current_index - 1
-        if prev_index < 0:
-            prev_index = len(queue) - 1  # Loop back to end
-            
-        # Update current song
-        audio_item = queue[prev_index]
-        rooms_data[room].update({
-            'current_file': audio_item['filename'],
-            'current_file_display': audio_item['filename_display'],
-            'current_cover': audio_item['cover'],
-            'current_index': prev_index,
-            'is_playing': False,
-            'last_progress_s': 0,
-            'last_updated_at': time.time(),
-        })
-    
-    # Emit new song to all clients
-    emit_data = {
-        'filename': audio_item['filename'],
-        'filename_display': audio_item['filename_display'],
-        'cover': audio_item['cover']
-    }
-    socketio.emit('new_file', emit_data, to=room)
-    socketio.emit('pause', {'time': 0}, to=room)
-    
-    # Update queue status
-    socketio.emit('queue_update', {
-        'queue': queue,
-        'current_index': prev_index
+        'current_index': random_index
     }, to=room)
 
 
