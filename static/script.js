@@ -1315,11 +1315,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
     socket.on('queue_update', (data) => {
         console.log('[DEBUG] Received queue_update:', data);
+        const prevQueueLength = currentQueue.length;
         currentQueue = data.queue || [];
-        currentQueueIndex = data.current_index || -1;
+    currentQueueIndex = typeof data.current_index === 'number' ? data.current_index : parseInt(data.current_index, 10);
+    if (isNaN(currentQueueIndex)) currentQueueIndex = -1;
         updateQueueDisplay();
         updateQueueCount();
         updateNextPrevButtons();
+
+        // If uploading, and queue length increased, show current playing filename
+        if (fileNameDisplay.classList.contains('uploading') && currentQueue.length > prevQueueLength) {
+            fileNameDisplay.classList.remove('uploading');
+            // Show the filename of the current song (first in queue or current index)
+            let item = currentQueue[currentQueueIndex];
+            if (!item && currentQueue.length > 0) item = currentQueue[0];
+            if (item) {
+                let displayName = item.filename_display || item.filename;
+                fileNameText.textContent = displayName.replace(/_/g, ' ');
+                fileNameText.title = displayName;
+            }
+        }
     });
 
     socket.on('server_sync', (data) => {
@@ -2212,7 +2227,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const queueHTML = currentQueue.map((item, index) => {
-            const isCurrentSong = index === currentQueueIndex;
+            const isCurrentSong = Number(index) === Number(currentQueueIndex);
             const coverSrc = item.cover ? `/uploads/${item.cover}` : '';
             const coverDisplay = item.cover 
                 ? `<img src="${coverSrc}" alt="Cover" class="queue-item-cover">` 
@@ -2351,7 +2366,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // ===============================
+// ===============================
 // Fullscreen Toggle Button Logic
 // ===============================
 function toggleFullscreen() {
