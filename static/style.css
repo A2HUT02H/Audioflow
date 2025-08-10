@@ -1,3 +1,9 @@
+.queue-modal-body::-webkit-scrollbar-button,
+.queue-list::-webkit-scrollbar-button {
+    display: none;
+    height: 0;
+    width: 0;
+}
 /* Exit Room Button - matches create-new-room-button style but icon is black */
 .exit-room-button {
     display: flex;
@@ -524,7 +530,8 @@ body.fullscreen-mode .cover-dancing-bars.right {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 1.5rem;
+    padding: 1rem;
+    padding-left: 1rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
@@ -552,8 +559,48 @@ body.fullscreen-mode .cover-dancing-bars.right {
 
 .queue-modal-body {
     padding: 0;
-    max-height: 50vh;
+    max-height: 55vh;
     overflow-y: auto;
+    /* Custom slim scrollbar for Webkit browsers */
+    scrollbar-width: thin;
+    scrollbar-color: #8884 #2228;
+}
+.queue-modal-body::-webkit-scrollbar {
+    width: 7px;
+    background: transparent;
+}
+.queue-modal-body::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #8884, #4448);
+    border-radius: 6px;
+    min-height: 24px;
+}
+.queue-modal-body::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #aaa7, #555b);
+}
+.queue-modal-body::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.queue-list {
+    /* Also apply slim scrollbar to the list itself if it overflows */
+    scrollbar-width: thin;
+    scrollbar-color: #8884 #2228;
+}
+.queue-list::-webkit-scrollbar {
+    width: 7px;
+    background: transparent;
+}
+.queue-list::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #8884, #4448);
+    border-radius: 6px;
+    min-height: 24px;
+}
+.queue-list::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #aaa7, #555b);
+}
+.queue-list::-webkit-scrollbar-track {
+    background: transparent;
+}
 }
 
 .queue-list {
@@ -574,6 +621,9 @@ body.fullscreen-mode .cover-dancing-bars.right {
     padding: 0.8rem;
     border-radius: 12px;
     margin-bottom: 0.5rem;
+    margin-top: 0.5rem;
+    margin-left: 0.5rem;
+    margin-right: 0.5rem;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.1);
     transition: all 0.3s ease;
@@ -595,13 +645,13 @@ body.fullscreen-mode .cover-dancing-bars.right {
 .queue-item-cover {
     width: 40px;
     height: 40px;
-    border-radius: 8px;
+    border-radius: 4px;
     object-fit: cover;
     background: rgba(255, 255, 255, 0.1);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.2rem;
+    font-size: 1.5rem;
     color: var(--text-muted-color);
 }
 
@@ -2032,4 +2082,76 @@ audio#player {
     .play-btn-large i { font-size: 1rem !important; }
     .volume-btn { width: 26px; height: 26px; }
     .main-player-row { gap: 0.35rem; }
+}
+
+
+/* === Fluid UI Enhancements Injected === */
+
+/* Smooth global transitions */
+*, *::before, *::after {
+    transition: all 0.25s ease;
+}
+
+/* Cover art animations */
+#cover-art {
+    opacity: 0;
+    transition: transform 0.42s cubic-bezier(.2,.9,.2,1), opacity 0.34s ease, box-shadow 0.34s ease;
+}
+#cover-art.loaded {
+    opacity: 1;
+    transform: scale(1);
+}
+#cover-art.playing {
+    transform: scale(1.02) rotate(-0.6deg);
+    box-shadow: 0 30px 70px rgba(0,0,0,0.6);
+}
+
+/* Button press feedback */
+.control-button,
+.create-new-room-button,
+.exit-room-button,
+.player-btn {
+    transition: transform 0.18s cubic-bezier(.2,.9,.2,1), box-shadow 0.18s ease, background 0.22s ease;
+}
+.control-button:active,
+.create-new-room-button:active,
+.exit-room-button:active,
+.player-btn:active {
+    transform: translateY(2px) scale(0.98);
+}
+
+/* Progress bar glow */
+body.playing .progress-fill {
+    box-shadow: 0 0 20px color-mix(in srgb, var(--current-bar-color) 40%, transparent);
+    filter: drop-shadow(0 0 8px color-mix(in srgb, var(--current-bar-color) 45%, transparent));
+}
+
+/* Volume popup slide */
+.volume-popup {
+    transform: translateX(-50%) translateY(8px);
+    transition: opacity 0.24s ease, transform 0.24s cubic-bezier(.2,.9,.2,1), visibility 0.24s;
+}
+.volume-popup.show {
+    transform: translateX(-50%) translateY(0);
+}
+
+/* Queue modal fade & depth */
+.queue-modal-content {
+    transform: translateY(-18px) scale(.995);
+    transition: transform 0.3s cubic-bezier(.2,.9,.2,1), opacity 0.3s ease;
+    opacity: 0;
+}
+.queue-modal.show .queue-modal-content {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+}
+/* === Fix for always-visible cover art and queue modal if JS class not applied === */
+#cover-art:not(.loaded) {
+    opacity: 1;
+    transform: none;
+}
+
+.queue-modal-content {
+    opacity: 1;
+    transform: none;
 }
