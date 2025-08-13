@@ -83,6 +83,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let isDraggingProgress = false;
     let isDraggingVolume = false;
     let lastVolume = 0.7; // Remember last volume for mute/unmute
+    let lastChangeDirection = null; // Track direction of song changes
+    let currentSongFile = null; // Track current song to detect automatic changes
     let isLooping = false; // Loop state
     let isShuffling = false; // Shuffle state
 
@@ -1133,9 +1135,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (currentQueue.length > 1) {
             if (isShuffling) {
                 console.log('Shuffle mode enabled, playing random next song');
+                lastChangeDirection = 'next'; // Set direction for animation
+                triggerSlideAnimation('next');
                 socket.emit('shuffle_next', { room: roomId, auto_play: true });
             } else {
                 console.log('Normal mode, auto-playing next song from queue');
+                lastChangeDirection = 'next'; // Set direction for animation
+                triggerSlideAnimation('next');
                 socket.emit('next_song', { room: roomId, auto_play: true });
             }
         } else {
@@ -1252,6 +1258,32 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('[DEBUG] Display filename contains Japanese chars:', /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(data.filename_display));
         }
         
+        // Determine if this is actually a song change
+        const isNewSong = currentSongFile && currentSongFile !== data.filename;
+
+        // Infer direction (basic: treat as next unless we detect otherwise later)
+        if (isNewSong) {
+            if (!lastChangeDirection) lastChangeDirection = 'next';
+            // If fullscreen, prep overlay slide
+            if (document.body.classList.contains('fullscreen-mode')) {
+                triggerFullscreenColorSlide(lastChangeDirection);
+            }
+            // Clear fixed colors so new theme can apply
+            const mh = document.querySelector('.main-heading');
+            const rc = document.querySelector('.room-code-display');
+            const fnt = document.querySelector('#file-name-text');
+            if (mh) mh.removeAttribute('data-fixed-color');
+            if (rc) {
+                rc.removeAttribute('data-fixed-color');
+                const span = rc.querySelector('span');
+                if (span) span.removeAttribute('data-fixed-color');
+            }
+            if (fnt) fnt.removeAttribute('data-fixed-color');
+        }
+
+        // Track current song
+        currentSongFile = data.filename;
+
         // Use display filename if available, otherwise fallback to filename
         const displayFilename = data.filename_display || data.filename;
         console.log('[DEBUG] Final display filename for loadAudio:', JSON.stringify(displayFilename));
@@ -1260,7 +1292,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     socket.on('room_state', (data) => {
         console.log('[DEBUG] Received room_state event with data:', data);
-        if (data.current_file) {
+    if (data.current_file) {
             console.log('[DEBUG] Room state filename:', JSON.stringify(data.current_file));
             console.log('[DEBUG] Room state display filename:', JSON.stringify(data.current_file_display));
             console.log('[DEBUG] Room state filename type:', typeof data.current_file);
@@ -1280,6 +1312,44 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         if (data.current_file) {
+            // Check if this is a song change (and not just the initial load or sync)
+            const isNewSong = currentSongFile && currentSongFile !== data.current_file;
+            if (isNewSong) {
+                // Infer direction if queue indices available
+                try {
+                    if (typeof data.current_index === 'number' && typeof currentQueueIndex === 'number' && currentQueueIndex >= 0) {
+                        if (data.current_index > currentQueueIndex) {
+                            lastChangeDirection = 'next';
+                        } else if (data.current_index < currentQueueIndex) {
+                            lastChangeDirection = 'prev';
+                        } else if (!lastChangeDirection) {
+                            lastChangeDirection = 'next';
+                        }
+                    } else if (!lastChangeDirection) {
+                        lastChangeDirection = 'next';
+                    }
+                } catch (e) {
+                    if (!lastChangeDirection) lastChangeDirection = 'next';
+                }
+                if (document.body.classList.contains('fullscreen-mode')) {
+                    triggerFullscreenColorSlide(lastChangeDirection || 'next');
+                }
+                // Clear fixed colors so new theme can apply
+                const mainHeadingEl = document.querySelector('.main-heading');
+                const roomCodeEl = document.querySelector('.room-code-display');
+                const fileNameEl = document.querySelector('#file-name-text');
+                if (mainHeadingEl) mainHeadingEl.removeAttribute('data-fixed-color');
+                if (roomCodeEl) {
+                    roomCodeEl.removeAttribute('data-fixed-color');
+                    const span = roomCodeEl.querySelector('span');
+                    if (span) span.removeAttribute('data-fixed-color');
+                }
+                if (fileNameEl) fileNameEl.removeAttribute('data-fixed-color');
+            }
+            
+            // Update current song tracker
+            currentSongFile = data.current_file;
+            
             // Use display filename if available, otherwise fallback to filename
             const displayFilename = data.current_file_display || data.current_file;
             loadAudio(data.current_file, data.current_cover, displayFilename);
@@ -1306,6 +1376,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateFileNameAnimation(); // Recalculate layout for paused state
                 updateCoverPositionVars();
             }
+
+            // If fullscreen and we set up a slide, trigger the slide-in once colors are ready
+            if (document.body.classList.contains('fullscreen-mode') && lastChangeDirection) {
+                // triggerFullscreenColorSlideIn will pick up direction after cover loads colors
+                setTimeout(() => {
+                    triggerFullscreenColorSlideIn(lastChangeDirection);
+                    lastChangeDirection = null; // reset after triggering
+                }, 100); // slight delay to allow loadAudio to start image load
+            }
         }
     });
 
@@ -1331,7 +1410,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!item && currentQueue.length > 0) item = currentQueue[0];
             if (item) {
                 let displayName = item.filename_display || item.filename;
-                fileNameText.textContent = displayName.replace(/_/g, ' ');
+                fileNameText.textContent = displayName
+                    .replace(/_/g, ' ')
+                    .replace(/\.(mp3|wav|ogg|flac|m4a)$/i, '');
                 fileNameText.title = displayName;
             }
         }
@@ -1481,12 +1562,24 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('[DEBUG] Final display name:', JSON.stringify(nameForDisplay));
         console.log('[DEBUG] Display name contains Japanese:', /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(nameForDisplay));
         
-        // Set the display text directly without modifications
-        let finalDisplayText = nameForDisplay.replace(/_/g, " ");
+        // Set the display text: remove underscores and common audio file extensions
+        let finalDisplayText = nameForDisplay
+            .replace(/_/g, " ")
+            .replace(/\.(mp3|wav|ogg|flac|m4a)$/i, "");
         console.log('[DEBUG] Final display text:', JSON.stringify(finalDisplayText));
         
         fileNameText.title = finalDisplayText;
         fileNameText.textContent = finalDisplayText;
+        // Always clear fixed colors before applying new theme
+        const mainHeadingEl = document.querySelector('.main-heading');
+        const roomCodeEl = document.querySelector('.room-code-display');
+        if (mainHeadingEl) mainHeadingEl.removeAttribute('data-fixed-color');
+        if (roomCodeEl) {
+            roomCodeEl.removeAttribute('data-fixed-color');
+            const span = roomCodeEl.querySelector('span');
+            if (span) span.removeAttribute('data-fixed-color');
+        }
+        if (fileNameText) fileNameText.removeAttribute('data-fixed-color');
         player.src = `/uploads/${encodeURIComponent(filename)}`;
         player.load();
         fileNameDisplay.classList.remove('playing');
@@ -1520,10 +1613,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     
                     // Setup 3D tilt effect for cover art
                     setup3DTiltEffect(coverArt);
+                    
+                    // Trigger slide-in animation if this is from a song change
+                    if (lastChangeDirection) {
+                        triggerSlideInAnimation(lastChangeDirection);
+                        lastChangeDirection = null; // Reset after use
+                    }
                 } catch (e) {
                     resetTheme();
                     // Still setup tilt effect even if color extraction fails
                     setup3DTiltEffect(coverArt);
+                    
+                    // Trigger slide-in animation if this is from a song change
+                    if (lastChangeDirection) {
+                        triggerSlideInAnimation(lastChangeDirection);
+                        lastChangeDirection = null; // Reset after use
+                    }
                 }
             };
             coverArt.onerror = () => {
@@ -1537,6 +1642,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 resetTheme();
                 updateCoverPositionVars();
+                
+                // Trigger slide-in animation if this is from a song change
+                if (lastChangeDirection) {
+                    triggerSlideInAnimation(lastChangeDirection);
+                    lastChangeDirection = null; // Reset after use
+                }
             };
         } else {
             // No cover art available, show placeholder
@@ -1552,6 +1663,12 @@ document.addEventListener('DOMContentLoaded', () => {
             currentColorPalette = null;
             resetTheme();
             updateCoverPositionVars();
+            
+            // Trigger slide-in animation if this is from a song change
+            if (lastChangeDirection) {
+                triggerSlideInAnimation(lastChangeDirection);
+                lastChangeDirection = null; // Reset after use
+            }
         }
     }
 
@@ -1694,12 +1811,19 @@ document.addEventListener('DOMContentLoaded', () => {
             rgb(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}) 80%,
             rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b}))`;
         
-        // Apply container background
+        // Apply container background only when NOT in fullscreen.
+        // In fullscreen, keep container transparent so the slide overlay is visible.
         const container = document.querySelector('.container');
         if (container) {
-            container.style.background = containerGradient;
-            container.style.backdropFilter = 'blur(12px)';
-            container.style.webkitBackdropFilter = 'blur(12px)';
+            if (!document.body.classList.contains('fullscreen-mode')) {
+                container.style.background = containerGradient;
+                container.style.backdropFilter = 'blur(12px)';
+                container.style.webkitBackdropFilter = 'blur(12px)';
+            } else {
+                container.style.background = '';
+                container.style.backdropFilter = '';
+                container.style.webkitBackdropFilter = '';
+            }
         }
         
         // Determine text and button colors based on brightness
@@ -1717,10 +1841,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         // Apply text colors
-        const mainHeading = document.querySelector('.main-heading');
+    const mainHeading = document.querySelector('.main-heading');
         const memberCount = document.querySelector('.member-count');
         const roomCodeDisplay = document.querySelector('.room-code-display');
         const fileNameText = document.querySelector('#file-name-text');
+    let computedHeadingColor = null;
         
         if (mainHeading) {
             // Check if heading has a fixed color from dancing bars
@@ -1735,6 +1860,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 mainHeading.style.color = fixedColor;
                 mainHeading.style.setProperty('color', fixedColor, 'important');
                 console.log(`Using fixed heading color: ${fixedColor}`);
+                computedHeadingColor = fixedColor;
             } else {
                 // For the heading, use the opposite shade based on background brightness
                 // The background at the top is the light shade, so we need to consider its brightness
@@ -1759,6 +1885,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 mainHeading.style.setProperty('color', headingColor, 'important');
                 
                 console.log(`Heading color set to: ${headingColor} (top brightness: ${topBrightness})`);
+                computedHeadingColor = headingColor;
             }
         }
         
@@ -1786,7 +1913,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 roomCodeDisplay.style.borderColor = textColor;
             }
         }
-        if (fileNameText) fileNameText.style.color = textColor;
+        // Match file name color to main heading if available
+        if (fileNameText) {
+            if (computedHeadingColor) {
+                fileNameText.style.setProperty('color', computedHeadingColor, 'important');
+            } else {
+                fileNameText.style.color = textColor;
+            }
+        }
         
         // Style cover art placeholder if visible
         if (coverArtPlaceholder && coverArtPlaceholder.classList.contains('visible')) {
@@ -2031,6 +2165,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Store as data attribute for persistence
                 mainHeading.setAttribute('data-fixed-color', barColorForHeading);
             }
+            if (fileNameText) {
+                fileNameText.style.setProperty('color', barColorForHeading, 'important');
+                fileNameText.setAttribute('data-fixed-color', barColorForHeading);
+            }
             if (roomCodeDisplay) {
                 roomCodeDisplay.style.setProperty('color', barColorForHeading, 'important');
                 // Store as data attribute for persistence
@@ -2088,7 +2226,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
         
-        if (memberCount) memberCount.style.color = '';
+    if (memberCount) memberCount.style.color = '';
         if (roomCodeDisplay) {
             // Only reset if no fixed color is stored
             const fixedColor = roomCodeDisplay.getAttribute('data-fixed-color');
@@ -2101,6 +2239,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (roomCodeSpan && !roomCodeSpan.getAttribute('data-fixed-color')) {
                     roomCodeSpan.style.removeProperty('color');
                 }
+            }
+        }
+        if (fileNameText) {
+            const fixedColor = fileNameText.getAttribute('data-fixed-color');
+            if (!fixedColor) {
+                fileNameText.style.removeProperty('color');
             }
         }
         if (fileNameText) fileNameText.style.color = '';
@@ -2332,11 +2476,210 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function nextSong() {
+        lastChangeDirection = 'next';
+        triggerFullscreenColorSlide('next');
         socket.emit('next_song', { room: roomId, auto_play: false });
     }
 
     function previousSong() {
+        lastChangeDirection = 'prev';
+        triggerFullscreenColorSlide('prev');
         socket.emit('previous_song', { room: roomId });
+    }
+
+    function triggerSlideAnimation(direction) {
+        // Handle fullscreen mode
+        if (document.body.classList.contains('fullscreen-mode')) {
+            triggerFullscreenColorSlide(direction);
+            return;
+        }
+
+        // Original logic for non-fullscreen mode
+        const coverSection = document.querySelector('.cover-section');
+        if (!coverSection) return;
+
+        // Remove any existing animation classes
+        coverSection.classList.remove('slide-next-in', 'slide-next-out', 'slide-prev-in', 'slide-prev-out');
+        
+        // Trigger the exit animation
+        if (direction === 'next') {
+            coverSection.classList.add('slide-next-out');
+        } else {
+            coverSection.classList.add('slide-prev-out');
+        }
+
+        // After the animation completes, we'll trigger the in animation when the new song loads
+        setTimeout(() => {
+            coverSection.classList.remove('slide-next-out', 'slide-prev-out');
+        }, 400); // Match animation duration
+    }
+
+    function triggerSlideInAnimation(direction) {
+        // Handle fullscreen mode
+        if (document.body.classList.contains('fullscreen-mode')) {
+            triggerFullscreenColorSlideIn(direction);
+            return;
+        }
+
+        // Original logic for non-fullscreen mode
+        const coverSection = document.querySelector('.cover-section');
+        if (!coverSection) return;
+
+        // Remove any existing animation classes
+        coverSection.classList.remove('slide-next-in', 'slide-next-out', 'slide-prev-in', 'slide-prev-out');
+        
+        // Small delay to ensure clean start
+        setTimeout(() => {
+            if (direction === 'next') {
+                coverSection.classList.add('slide-next-in');
+            } else {
+                coverSection.classList.add('slide-prev-in');
+            }
+
+            // Clean up animation class after completion
+            setTimeout(() => {
+                coverSection.classList.remove('slide-next-in', 'slide-prev-in');
+            }, 400);
+        }, 50);
+    }
+
+    function triggerFullscreenColorSlide(direction) {
+        // Only trigger in fullscreen mode
+        if (!document.body.classList.contains('fullscreen-mode')) {
+            console.log('Not in fullscreen mode, using regular slide animation');
+            triggerSlideAnimation(direction);
+            return;
+        }
+
+        console.log(`Triggering fullscreen color slide: ${direction}`);
+    const overlay = document.getElementById('fullscreen-color-slide-overlay');
+    const coverSection = document.querySelector('.cover-section');
+        if (!overlay) {
+            console.log('Fullscreen overlay not found');
+            return;
+        }
+
+    // Remove any existing classes
+    overlay.classList.remove('slide-from-right', 'slide-from-left', 'slide-in', 'slide-out-right', 'slide-out-left', 'stay-background');
+        if (coverSection) {
+            coverSection.classList.remove('fullscreen-cover-next-in', 'fullscreen-cover-prev-in');
+        }
+        
+        // Set the starting position based on direction
+        if (direction === 'next') {
+            overlay.classList.add('slide-from-right');
+            console.log('Set slide from right');
+        } else {
+            overlay.classList.add('slide-from-left');
+            console.log('Set slide from left');
+        }
+
+    // Store the direction for when the new song loads
+    overlay.setAttribute('data-slide-direction', direction);
+    }
+
+    function triggerFullscreenColorSlideIn(direction) {
+        // Only work in fullscreen mode
+        if (!document.body.classList.contains('fullscreen-mode')) {
+            return;
+        }
+
+        const overlay = document.getElementById('fullscreen-color-slide-overlay');
+        if (!overlay) return;
+
+        // Get the stored direction or use the provided direction
+        const slideDirection = overlay.getAttribute('data-slide-direction') || direction;
+        
+    // Function to apply the color slide animation
+        const applyColorSlide = () => {
+            if (currentDominantColor) {
+                const [r, g, b] = currentDominantColor;
+                const shades = getSecondaryColorOrShades(currentDominantColor, currentColorPalette);
+                
+                // Create body background gradient for the new theme
+                const bodyGradient = `linear-gradient(135deg, 
+                    rgb(${Math.max(0, shades.dark.r - 20)}, ${Math.max(0, shades.dark.g - 20)}, ${Math.max(0, shades.dark.b - 20)}), 
+                    rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}))`;
+                
+                // Set the overlay background
+                overlay.style.background = bodyGradient;
+
+                // Prepare overlay: snap to start position without transition to prevent edge stutter
+                overlay.classList.add('no-transition');
+                overlay.classList.remove('slide-in', 'slide-from-left', 'slide-from-right');
+                if (slideDirection === 'next') {
+                    overlay.classList.add('slide-from-right');
+                } else {
+                    overlay.classList.add('slide-from-left');
+                }
+                // Force reflow so the browser recognizes the starting transform
+                void overlay.offsetWidth;
+
+                // Small delay to ensure CSS is applied, then start animation
+                setTimeout(() => {
+                    // Trigger the cover slide in the same direction as overlay
+                    const coverSection = document.querySelector('.cover-section');
+                    if (coverSection) {
+                        coverSection.classList.remove('fullscreen-cover-next-in', 'fullscreen-cover-prev-in');
+                        if (slideDirection === 'next') {
+                            coverSection.classList.add('fullscreen-cover-next-in');
+                        } else {
+                            coverSection.classList.add('fullscreen-cover-prev-in');
+                        }
+                    }
+
+                    // Enable transition and start overlay slide
+                    overlay.classList.remove('no-transition');
+                    // Force reflow again to apply transition state cleanly
+                    void overlay.offsetWidth;
+                    overlay.classList.add('slide-in');
+
+                    // After slide-in completes, keep it in place (no slide-out)
+                    setTimeout(() => {
+                        // Finalize: set body background to match the new theme after the slide finishes
+                        if (document.body.classList.contains('fullscreen-mode')) {
+                            document.body.style.background = bodyGradient;
+                        }
+
+                        // Lock overlay in place behind UI
+                        overlay.classList.remove('slide-in', 'slide-from-left', 'slide-from-right');
+                        overlay.classList.add('stay-background');
+                        overlay.removeAttribute('data-slide-direction');
+                        // Reset transform state for the next run
+                        // Keep stay-background but ensure no lingering transition state
+                        overlay.classList.add('no-transition');
+                        void overlay.offsetWidth;
+                        overlay.classList.remove('no-transition');
+                        // Clean cover slide helper classes after animation completes
+                        const coverSection2 = document.querySelector('.cover-section');
+                        if (coverSection2) {
+                            coverSection2.classList.remove('fullscreen-cover-next-in', 'fullscreen-cover-prev-in');
+                        }
+                    }, 800); // Wait for slide-in to complete (matches CSS 0.8s)
+                }, 50);
+            } else {
+                console.log('No dominant color available for slide animation');
+            }
+        };
+
+        // If colors are already available, apply immediately
+        if (currentDominantColor) {
+            applyColorSlide();
+        } else {
+            // Wait for colors to be extracted, then apply
+            let attempts = 0;
+            const maxAttempts = 40; // 2 seconds max wait
+            const checkColors = setInterval(() => {
+                attempts++;
+                if (currentDominantColor) {
+                    clearInterval(checkColors);
+                    applyColorSlide();
+                } else if (attempts >= maxAttempts) {
+                    clearInterval(checkColors);
+                    console.log('Timeout waiting for color extraction');
+                }
+            }, 50);
+        }
     }
 
     function updateFileNameAnimation() {
@@ -2366,7 +2709,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-// ===============================
+    // ===============================
 // Fullscreen Toggle Button Logic
 // ===============================
 function toggleFullscreen() {
@@ -2380,6 +2723,21 @@ function toggleFullscreen() {
             document.exitFullscreen().then(() => {
                 // Remove fullscreen mode class when exiting fullscreen
                 document.body.classList.remove('fullscreen-mode');
+                
+                // Reset background to default when exiting fullscreen
+                document.body.style.background = 'linear-gradient(135deg, var(--background-color-start), var(--background-color-end))';
+                
+                // Clean up any fullscreen overlay
+                const overlay = document.getElementById('fullscreen-color-slide-overlay');
+                if (overlay) {
+                    overlay.classList.remove('slide-from-right', 'slide-from-left', 'slide-in', 'slide-out-right', 'slide-out-left', 'stay-background');
+                    overlay.style.background = '';
+                    overlay.removeAttribute('data-slide-direction');
+                }
+                const coverSection = document.querySelector('.cover-section');
+                if (coverSection) {
+                    coverSection.classList.remove('fullscreen-cover-next-in', 'fullscreen-cover-prev-in');
+                }
             });
         }
     }
@@ -2390,6 +2748,21 @@ document.addEventListener('fullscreenchange', () => {
     if (!document.fullscreenElement) {
         // Exited fullscreen, remove the mode class
         document.body.classList.remove('fullscreen-mode');
+        
+    // Reset background to default when exiting fullscreen
+    document.body.style.background = 'linear-gradient(135deg, var(--background-color-start), var(--background-color-end))';
+        
+        // Clean up any fullscreen overlay
+        const overlay = document.getElementById('fullscreen-color-slide-overlay');
+        if (overlay) {
+            overlay.classList.remove('slide-from-right', 'slide-from-left', 'slide-in', 'slide-out-right', 'slide-out-left', 'stay-background');
+            overlay.style.background = '';
+            overlay.removeAttribute('data-slide-direction');
+        }
+        const coverSection = document.querySelector('.cover-section');
+        if (coverSection) {
+            coverSection.classList.remove('fullscreen-cover-next-in', 'fullscreen-cover-prev-in');
+        }
     }
 });
 
@@ -2397,4 +2770,123 @@ const fullscreenBtn = document.getElementById('fullscreen-btn');
 if (fullscreenBtn) {
     fullscreenBtn.addEventListener('click', toggleFullscreen);
 }
+// ===============================
+// Fullscreen Idle Hide/Show Logic
+// ===============================
+let fullscreenIdleTimer = null;
+let isPlayerHidden = false;
+const FULLSCREEN_IDLE_TIMEOUT = 2500; // ms
+
+function showPlayerBox() {
+    const customPlayer = document.querySelector('.custom-player');
+    const progressBarContainer = document.querySelector('.progress-bar-container');
+    const playerTimeDisplay = document.querySelector('.player-time-display');
+    // Leaving idle state
+    document.body.classList.remove('fullscreen-idle');
+    if (customPlayer) customPlayer.classList.remove('fullscreen-hide');
+    if (progressBarContainer) {
+        progressBarContainer.classList.remove('progress-bar-only');
+        // Only move progress bar if it's not already in the correct position
+        if (!customPlayer.contains(progressBarContainer)) {
+            // Insert after player-time-display, which is the correct position
+            if (playerTimeDisplay && playerTimeDisplay.nextSibling) {
+                customPlayer.insertBefore(progressBarContainer, playerTimeDisplay.nextSibling);
+            } else {
+                // Fallback: insert before main-player-row
+                const mainPlayerRow = customPlayer.querySelector('.main-player-row');
+                if (mainPlayerRow) {
+                    customPlayer.insertBefore(progressBarContainer, mainPlayerRow);
+                } else {
+                    customPlayer.appendChild(progressBarContainer);
+                }
+            }
+        }
+    }
+    isPlayerHidden = false;
+}
+
+function hidePlayerBox() {
+    if (!document.body.classList.contains('fullscreen-mode')) return;
+    const customPlayer = document.querySelector('.custom-player');
+    const progressBarContainer = document.querySelector('.progress-bar-container');
+    // Entering idle state
+    document.body.classList.add('fullscreen-idle');
+    if (customPlayer) customPlayer.classList.add('fullscreen-hide');
+    if (progressBarContainer) {
+        progressBarContainer.classList.add('progress-bar-only');
+        // Move progress bar outside of custom player to keep it visible
+        document.body.appendChild(progressBarContainer);
+    }
+    isPlayerHidden = true;
+}
+
+function resetFullscreenIdleTimer() {
+    if (!document.body.classList.contains('fullscreen-mode')) return;
+    showPlayerBox();
+    if (fullscreenIdleTimer) clearTimeout(fullscreenIdleTimer);
+    fullscreenIdleTimer = setTimeout(() => {
+        hidePlayerBox();
+    }, FULLSCREEN_IDLE_TIMEOUT);
+}
+
+// Only activate in fullscreen mode
+document.addEventListener('mousemove', (e) => {
+    if (document.body.classList.contains('fullscreen-mode')) {
+        resetFullscreenIdleTimer();
+    }
+});
+document.addEventListener('keydown', (e) => {
+    if (document.body.classList.contains('fullscreen-mode')) {
+        resetFullscreenIdleTimer();
+    }
+});
+// Add touch events for mobile devices
+document.addEventListener('touchstart', (e) => {
+    if (document.body.classList.contains('fullscreen-mode')) {
+        resetFullscreenIdleTimer();
+    }
+});
+document.addEventListener('touchmove', (e) => {
+    if (document.body.classList.contains('fullscreen-mode')) {
+        resetFullscreenIdleTimer();
+    }
+});
+document.addEventListener('touchend', (e) => {
+    if (document.body.classList.contains('fullscreen-mode')) {
+        resetFullscreenIdleTimer();
+    }
+});
+document.addEventListener('fullscreenchange', () => {
+    if (document.body.classList.contains('fullscreen-mode')) {
+        resetFullscreenIdleTimer();
+    } else {
+    // Ensure idle class is cleared when exiting fullscreen
+    document.body.classList.remove('fullscreen-idle');
+        // Always restore progress bar when exiting fullscreen, regardless of state
+        const customPlayer = document.querySelector('.custom-player');
+        const progressBarContainer = document.querySelector('.progress-bar-container');
+        const playerTimeDisplay = document.querySelector('.player-time-display');
+        if (customPlayer) customPlayer.classList.remove('fullscreen-hide');
+        if (progressBarContainer) {
+            progressBarContainer.classList.remove('progress-bar-only');
+            // Ensure progress bar is back in its proper position
+            if (!customPlayer.contains(progressBarContainer)) {
+                // Insert after player-time-display, which is the correct position
+                if (playerTimeDisplay && playerTimeDisplay.nextSibling) {
+                    customPlayer.insertBefore(progressBarContainer, playerTimeDisplay.nextSibling);
+                } else {
+                    // Fallback: insert before main-player-row
+                    const mainPlayerRow = customPlayer.querySelector('.main-player-row');
+                    if (mainPlayerRow) {
+                        customPlayer.insertBefore(progressBarContainer, mainPlayerRow);
+                    } else {
+                        customPlayer.appendChild(progressBarContainer);
+                    }
+                }
+            }
+        }
+        isPlayerHidden = false;
+        if (fullscreenIdleTimer) clearTimeout(fullscreenIdleTimer);
+    }
+});
 });
