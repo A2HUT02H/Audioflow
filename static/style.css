@@ -1,3 +1,7 @@
+--- START OF FILE style.css ---
+
+/* --- Fixes & base rules --- */
+/* Scrollbar buttons hidden */
 .queue-modal-body::-webkit-scrollbar-button,
 .queue-list::-webkit-scrollbar-button {
     display: none;
@@ -181,6 +185,19 @@
     transform: scale(0.95);
 }
 
+/* Ensure fullscreen button is top-right in fullscreen mode */
+body.fullscreen-mode .fullscreen-btn {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    left: auto;
+    bottom: auto;
+    display: flex !important;
+    z-index: 1000;
+    opacity: 1;
+    transform: none;
+}
+
 /* Show fullscreen button on container hover */
 .container:hover .fullscreen-btn {
     opacity: 1;
@@ -193,7 +210,67 @@ body.fullscreen-mode {
     padding: 0;
     margin: 0;
     overflow: hidden;
+    position: relative;
 }
+
+/* Fullscreen Color Transition Slide Overlay */
+.fullscreen-color-slide-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: linear-gradient(135deg, var(--next-background-color-start, #000), var(--next-background-color-end, #000));
+    /* Place behind app content so UI stays visible during animation */
+    z-index: 0;
+    transform: translateX(100%);
+    transition: transform 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: none;
+    display: none; /* Hidden by default */
+}
+
+/* Only show overlay in fullscreen mode */
+body.fullscreen-mode .fullscreen-color-slide-overlay {
+    display: block;
+}
+
+/* NEW: Class for when the overlay becomes the persistent background */
+body.fullscreen-mode .fullscreen-color-slide-overlay.stay-background {
+    /* Keep it behind all interactive UI */
+    z-index: 0;
+    transition: none; /* No transition for this static state */
+    transform: translateX(0); /* Ensure it's in place */
+    box-shadow: none !important; /* Remove shadow if it's the background */
+}
+
+
+body.fullscreen-mode .fullscreen-color-slide-overlay.slide-from-right {
+    transform: translateX(100%);
+}
+
+body.fullscreen-mode .fullscreen-color-slide-overlay.slide-from-left {
+    transform: translateX(-100%);
+}
+
+body.fullscreen-mode .fullscreen-color-slide-overlay.slide-in {
+    transform: translateX(0);
+}
+
+/* Helper: temporarily disable transition to set start position without stutter */
+.fullscreen-color-slide-overlay.no-transition {
+    transition: none !important;
+}
+
+/* REMOVED: slide-out-right and slide-out-left as they are no longer needed */
+/*
+body.fullscreen-mode .fullscreen-color-slide-overlay.slide-out-right {
+    transform: translateX(100%);
+}
+
+body.fullscreen-mode .fullscreen-color-slide-overlay.slide-out-left {
+    transform: translateX(-100%);
+}
+*/
 
 body.fullscreen-mode .container {
     background: transparent;
@@ -213,6 +290,9 @@ body.fullscreen-mode .container {
     /* Ensure content doesn't get cut off on mobile */
     min-height: 100vh;
     overflow: visible;
+    /* Ensure content sits above the sliding background */
+    position: relative;
+    z-index: 10;
 }
 
 body.fullscreen-mode .cover-section {
@@ -251,7 +331,58 @@ body.fullscreen-mode .custom-player {
     z-index: 50;
     /* Ensure it's always visible on mobile */
     min-height: 60px;
+    transition: opacity 0.4s, visibility 0.4s, transform 0.4s;
 }
+
+body.fullscreen-mode .custom-player.fullscreen-hide {
+    opacity: 0;
+    pointer-events: none;
+    visibility: hidden;
+    transform: translateX(-50%) translateY(40px) scale(0.98);
+}
+
+body.fullscreen-mode .progress-bar-container.progress-bar-only {
+    position: fixed !important;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    margin: 0 auto !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 8px !important;
+    z-index: 120;
+    box-shadow: none !important;
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.4s;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+body.fullscreen-mode .progress-bar-container.progress-bar-only .progress-bar {
+    height: 6px !important;
+    width: 100vw !important;
+    margin: 0;
+    box-shadow: none !important;
+    background: linear-gradient(90deg, rgba(255,255,255,0.15) 0%, rgba(255,255,255,0.08) 100%) !important;
+    border: none !important;
+    border-radius: 0 !important;
+}
+
+body.fullscreen-mode .progress-bar-container.progress-bar-only .progress-handle {
+    display: none !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    visibility: hidden !important;
+}
+
+body.fullscreen-mode .progress-bar-container.progress-bar-only .progress-fill {
+    height: 100% !important;
+    display: block !important;
+    visibility: visible !important;
+}
+
 
 /* Keep play button size comfortable in fullscreen */
 body.fullscreen-mode .play-btn-large {
@@ -276,6 +407,14 @@ body.fullscreen-mode .main-header {
     /* Removed blur effect in fullscreen mode */
 }
 
+/* Hide room code and header controls in fullscreen idle */
+body.fullscreen-mode.fullscreen-idle .room-header-controls,
+body.fullscreen-mode.fullscreen-idle .member-count,
+body.fullscreen-mode.fullscreen-idle .create-new-room-button,
+body.fullscreen-mode.fullscreen-idle .exit-room-button {
+    display: none !important;
+}
+
 body.fullscreen-mode .controls-section {
     display: none;
 }
@@ -289,6 +428,42 @@ body.fullscreen-mode #file-name {
     max-width: 600px;
     font-size: 1.2rem;
     z-index: 40;
+}
+
+/* Fullscreen idle: hide header and move filename below the cover (left-aligned, bigger, no bars) */
+body.fullscreen-mode.fullscreen-idle .main-header {
+    display: none !important;
+}
+
+body.fullscreen-mode.fullscreen-idle #file-name {
+    position: fixed;
+    top: calc(50% + (min(60vh, 500px) / 2) + 24px);
+    left: max(16px, env(safe-area-inset-left, 16px));
+    transform: none;
+    width: min(520px, 80vw);
+    max-width: min(520px, 80vw);
+    padding: 0;
+    border: none !important;
+    outline: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    z-index: 20; /* Above overlay */
+    text-align: left;
+    margin: 0 !important;
+    right: auto !important;
+    display: block !important;
+}
+
+body.fullscreen-mode.fullscreen-idle #file-name::before,
+body.fullscreen-mode.fullscreen-idle #file-name::after {
+    display: none !important;
+    content: none !important;
+}
+
+body.fullscreen-mode.fullscreen-idle #file-name #file-name-text {
+    font-weight: 700;
+    font-size: clamp(1.25rem, 2.5vw, 1.8rem);
+    text-align: left;
 }
 
 /* Dancing bars adjustments for fullscreen */
@@ -600,7 +775,6 @@ body.fullscreen-mode .cover-dancing-bars.right {
 }
 .queue-list::-webkit-scrollbar-track {
     background: transparent;
-}
 }
 
 .queue-list {
@@ -1690,7 +1864,7 @@ audio#player {
 }
 
 
-/* Cover Art Dancing Bars - New Effect */
+/* Cover Art Slide Animations for Song Changes */
 .cover-section {
     position: relative;
     display: flex;
@@ -1704,6 +1878,115 @@ audio#player {
     --cover-size: 280px;          /* matches #cover-art default width */
     --bar-gap: 10px;              /* space between image and bars */
     --bar-group-width: 15px;      /* 3 bars (3px each) + 2 gaps (3px each) */
+    overflow: hidden; /* Hide slide animations */
+}
+
+#cover-art, .cover-art-placeholder {
+    transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* Next song animation - slide in from right */
+.cover-section.slide-next-in #cover-art,
+.cover-section.slide-next-in .cover-art-placeholder {
+    animation: slideNextIn 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.cover-section.slide-next-out #cover-art,
+.cover-section.slide-next-out .cover-art-placeholder {
+    animation: slideNextOut 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+/* Previous song animation - slide in from left */
+.cover-section.slide-prev-in #cover-art,
+.cover-section.slide-prev-in .cover-art-placeholder {
+    animation: slidePrevIn 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.cover-section.slide-prev-out #cover-art,
+.cover-section.slide-prev-out .cover-art-placeholder {
+    animation: slidePrevOut 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+@keyframes slideNextIn {
+    from {
+        transform: translateX(100%) scale(0.8);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0) scale(1);
+        opacity: 1;
+    }
+}
+
+@keyframes slideNextOut {
+    from {
+        transform: translateX(0) scale(1);
+        opacity: 1;
+    }
+    to {
+        transform: translateX(-100%) scale(0.8);
+        opacity: 0;
+    }
+}
+
+@keyframes slidePrevIn {
+    from {
+        transform: translateX(-100%) scale(0.8);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0) scale(1);
+        opacity: 1;
+    }
+}
+
+@keyframes slidePrevOut {
+    from {
+        transform: translateX(0) scale(1);
+        opacity: 1;
+    }
+    to {
+        transform: translateX(100%) scale(0.8);
+        opacity: 0;
+    }
+}
+
+/* Container background slide animations */
+.container {
+    transition: background 0.4s ease;
+}
+
+/* Fullscreen: Cover slides in with the background (0.8s to match overlay) */
+body.fullscreen-mode .cover-section.fullscreen-cover-next-in #cover-art,
+body.fullscreen-mode .cover-section.fullscreen-cover-next-in .cover-art-placeholder {
+    animation: fsSlideNextIn 0.8s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+body.fullscreen-mode .cover-section.fullscreen-cover-prev-in #cover-art,
+body.fullscreen-mode .cover-section.fullscreen-cover-prev-in .cover-art-placeholder {
+    animation: fsSlidePrevIn 0.8s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes fsSlideNextIn {
+    from {
+        transform: translateX(100%) scale(0.96);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0) scale(1);
+        opacity: 1;
+    }
+}
+
+@keyframes fsSlidePrevIn {
+    from {
+        transform: translateX(-100%) scale(0.96);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0) scale(1);
+        opacity: 1;
+    }
 }
 
 .cover-dancing-bars {
@@ -1828,14 +2111,6 @@ audio#player {
     letter-spacing: 1px;
     transition: color 0.5s ease; /* Smooth transition for theme changes */
     /* This will be overridden by JavaScript with !important when dancing bars set a fixed color */
-}
-
-/* --- Member Count Styling --- */
-.member-count {
-    color: var(--text-color);
-    font-size: 0.9rem;
-    font-weight: 500;
-    transition: color 0.5s ease; /* Smooth transition for theme changes */
 }
 
 /* --- New styles for Room Header Controls --- */
