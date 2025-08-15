@@ -206,7 +206,7 @@ body.fullscreen-mode .fullscreen-btn {
 
 /* Fullscreen Mode Styles */
 body.fullscreen-mode {
-    background: linear-gradient(135deg, var(--background-color-start), var(--background-color-end));
+    /* Background controlled by JavaScript for solid color */
     padding: 0;
     margin: 0;
     overflow: hidden;
@@ -407,12 +407,23 @@ body.fullscreen-mode .main-header {
     /* Removed blur effect in fullscreen mode */
 }
 
-/* Hide room code and header controls in fullscreen idle */
+/* Add transitions to elements that will fade in/out during idle state */
+body.fullscreen-mode .room-header-controls,
+body.fullscreen-mode .member-count,
+body.fullscreen-mode .create-new-room-button,
+body.fullscreen-mode .exit-room-button,
+body.fullscreen-mode .main-header {
+    transition: opacity 0.5s ease, visibility 0.5s ease;
+}
+
+/* Hide room code and header controls in fullscreen idle with smooth fade */
 body.fullscreen-mode.fullscreen-idle .room-header-controls,
 body.fullscreen-mode.fullscreen-idle .member-count,
 body.fullscreen-mode.fullscreen-idle .create-new-room-button,
 body.fullscreen-mode.fullscreen-idle .exit-room-button {
-    display: none !important;
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
 }
 
 body.fullscreen-mode .controls-section {
@@ -432,7 +443,13 @@ body.fullscreen-mode #file-name {
 
 /* Fullscreen idle: hide header and move filename below the cover (left-aligned, bigger, no bars) */
 body.fullscreen-mode.fullscreen-idle .main-header {
-    display: none !important;
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}
+
+body.fullscreen-mode #file-name {
+    transition: all 0.5s ease;
 }
 
 body.fullscreen-mode.fullscreen-idle #file-name {
@@ -452,6 +469,7 @@ body.fullscreen-mode.fullscreen-idle #file-name {
     margin: 0 !important;
     right: auto !important;
     display: block !important;
+    overflow: visible !important;
 }
 
 body.fullscreen-mode.fullscreen-idle #file-name::before,
@@ -460,10 +478,44 @@ body.fullscreen-mode.fullscreen-idle #file-name::after {
     content: none !important;
 }
 
+body.fullscreen-mode #file-name #file-name-text {
+    transition: all 0.5s ease;
+}
+
 body.fullscreen-mode.fullscreen-idle #file-name #file-name-text {
     font-weight: 700;
     font-size: clamp(1.25rem, 2.5vw, 1.8rem);
     text-align: left;
+    color: #fff !important;
+    background: none !important;
+    -webkit-mask-image: none !important;
+    mask-image: none !important;
+    opacity: 1 !important;
+    animation: none !important;
+    text-shadow: none !important;
+}
+
+body.fullscreen-mode.fullscreen-idle #file-name #file-name-text.long {
+    color: #fff !important;
+    background: none !important;
+    -webkit-mask-image: none !important;
+    mask-image: none !important;
+    opacity: 1 !important;
+    animation: none !important;
+    text-shadow: none !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+}
+
+body.fullscreen-mode.fullscreen-idle #file-name.playing {
+    -webkit-mask-image: none !important;
+    mask-image: none !important;
+}
+
+body.fullscreen-mode.fullscreen-idle #file-name.playing #file-name-text {
+    color: #fff !important;
+    -webkit-mask-image: none !important;
+    mask-image: none !important;
 }
 
 /* Dancing bars adjustments for fullscreen */
