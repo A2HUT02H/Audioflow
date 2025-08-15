@@ -84,6 +84,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let isDraggingVolume = false;
     let lastVolume = 0.7; // Remember last volume for mute/unmute
     let lastChangeDirection = null; // Track direction of song changes
+    let manualDirection = null; // Direction explicitly set by local button click
     let currentSongFile = null; // Track current song to detect automatic changes
     let isLooping = false; // Loop state
     let isShuffling = false; // Shuffle state
@@ -93,6 +94,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Queue State ---
     let currentQueue = [];
     let currentQueueIndex = -1;
+    let lastQueueIndex = -1; // Track previous index for direction inference
 
     const MAX_ALLOWED_DRIFT_S = 0.5;
     const PLAYBACK_RATE_ADJUST = 0.05;
@@ -970,7 +972,11 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('[DEBUG] Upload button and audio input found, setting up event listeners');
         uploadBtn.addEventListener('click', () => {
             console.log('[DEBUG] Upload button clicked');
+            console.log('[DEBUG] Audio input element:', audioInput);
+            console.log('[DEBUG] Audio input disabled:', audioInput.disabled);
+            console.log('[DEBUG] Audio input style display:', audioInput.style.display);
             audioInput.click();
+            console.log('[DEBUG] Audio input click() called');
         });
 
         audioInput.addEventListener('change', () => {
@@ -1261,10 +1267,9 @@ document.addEventListener('DOMContentLoaded', () => {
         // Determine if this is actually a song change
         const isNewSong = currentSongFile && currentSongFile !== data.filename;
 
-        // Infer direction (basic: treat as next unless we detect otherwise later)
+        // Song change: prepare slide if fullscreen; don't override existing direction
         if (isNewSong) {
-            if (!lastChangeDirection) lastChangeDirection = 'next';
-            // If fullscreen, prep overlay slide
+            if (!lastChangeDirection) lastChangeDirection = 'next'; // fallback
             if (document.body.classList.contains('fullscreen-mode')) {
                 triggerFullscreenColorSlide(lastChangeDirection);
             }
@@ -1312,27 +1317,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         if (data.current_file) {
-            // Check if this is a song change (and not just the initial load or sync)
             const isNewSong = currentSongFile && currentSongFile !== data.current_file;
             if (isNewSong) {
-                // Infer direction if queue indices available
-                try {
-                    if (typeof data.current_index === 'number' && typeof currentQueueIndex === 'number' && currentQueueIndex >= 0) {
-                        if (data.current_index > currentQueueIndex) {
-                            lastChangeDirection = 'next';
-                        } else if (data.current_index < currentQueueIndex) {
-                            lastChangeDirection = 'prev';
-                        } else if (!lastChangeDirection) {
-                            lastChangeDirection = 'next';
-                        }
-                    } else if (!lastChangeDirection) {
-                        lastChangeDirection = 'next';
-                    }
-                } catch (e) {
-                    if (!lastChangeDirection) lastChangeDirection = 'next';
-                }
+                // If queue_update already inferred direction, respect it; else fallback
+                if (!lastChangeDirection) lastChangeDirection = 'next';
                 if (document.body.classList.contains('fullscreen-mode')) {
-                    triggerFullscreenColorSlide(lastChangeDirection || 'next');
+                    triggerFullscreenColorSlide(lastChangeDirection);
                 }
                 // Clear fixed colors so new theme can apply
                 const mainHeadingEl = document.querySelector('.main-heading');
@@ -1394,10 +1384,76 @@ document.addEventListener('DOMContentLoaded', () => {
 
     socket.on('queue_update', (data) => {
         console.log('[DEBUG] Received queue_update:', data);
+        console.log('[DEBUG] Previous queue length:', currentQueue.length, 'New queue length:', data.queue ? data.queue.length : 0);
+        console.log('[DEBUG] Is uploading:', fileNameDisplay.classList.contains('uploading'));
         const prevQueueLength = currentQueue.length;
+        lastQueueIndex = currentQueueIndex;
         currentQueue = data.queue || [];
-    currentQueueIndex = typeof data.current_index === 'number' ? data.current_index : parseInt(data.current_index, 10);
-    if (isNaN(currentQueueIndex)) currentQueueIndex = -1;
+	currentQueueIndex = typeof data.current_index === 'number' ? data.current_index : parseInt(data.current_index, 10);
+	if (isNaN(currentQueueIndex)) currentQueueIndex = -1;
+
+        // Handle empty queue - stop playback and clear current song
+        if (currentQueue.length === 0) {
+            player.pause();
+            player.src = '';
+            player.load();
+            fileNameText.textContent = "No file selected.";
+            fileNameDisplay.classList.remove('playing');
+            hideCoverDancingBars();
+            
+            // Hide both cover art and placeholder when no file is selected
+            coverArt.style.display = 'none';
+            coverArt.src = '';
+            if (coverArtPlaceholder) {
+                coverArtPlaceholder.style.display = 'none';
+                coverArtPlaceholder.classList.remove('visible');
+            }
+            
+            // Hide fullscreen button if no audio
+            const fullscreenBtn = document.querySelector('.fullscreen-btn');
+            if (fullscreenBtn) fullscreenBtn.style.setProperty('display', 'none', 'important');
+            
+            // Reset file input to allow re-uploading same file
+            if (audioInput) {
+                audioInput.value = '';
+                console.log('[DEBUG] Reset audio input value for re-upload');
+            }
+            
+            // Reset theme
+            resetTheme();
+            updateFileNameAnimation();
+            updateCoverPositionVars();
+            currentSongFile = null;
+            currentDominantColor = null;
+            currentColorPalette = null;
+        }
+
+        // Infer direction on queue index change (remote)
+        if (lastQueueIndex !== -1 && currentQueueIndex !== -1 && lastQueueIndex !== currentQueueIndex) {
+            const qLen = currentQueue.length;
+            if (qLen > 1) {
+                const oldIdx = lastQueueIndex;
+                const newIdx = currentQueueIndex;
+                const nextIdx = (oldIdx + 1) % qLen;
+                const prevIdx = (oldIdx - 1 + qLen) % qLen;
+                let inferred;
+                if (newIdx === nextIdx) {
+                    inferred = 'next';
+                } else if (newIdx === prevIdx) {
+                    inferred = 'prev';
+                } else {
+                    const forward = (newIdx - oldIdx + qLen) % qLen;
+                    const backward = (oldIdx - newIdx + qLen) % qLen;
+                    if (forward === backward) {
+                        inferred = manualDirection || (newIdx > oldIdx ? 'next' : 'prev');
+                    } else {
+                        inferred = backward < forward ? 'prev' : 'next';
+                    }
+                }
+                lastChangeDirection = manualDirection || inferred;
+                console.log('[DIR] queue_update oldIdx:', oldIdx, 'newIdx:', newIdx, 'qLen:', qLen, 'inferred:', inferred, 'manualDirection:', manualDirection, 'used:', lastChangeDirection);
+            }
+        }
         updateQueueDisplay();
         updateQueueCount();
         updateNextPrevButtons();
@@ -1416,27 +1472,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 fileNameText.title = displayName;
             }
         }
-    });
-
-    socket.on('server_sync', (data) => {
-        if (userHasJustSeeked || player.paused || isReceivingUpdate || player.seeking) {
-            return;
-        }
-        const timeSinceServerUpdate = ((Date.now() + serverTimeOffset) / 1000) - data.server_time;
-        const serverProgress = data.audio_time + timeSinceServerUpdate;
-        const clientProgress = player.currentTime;
-        const drift = clientProgress - serverProgress;
-
-        if (Math.abs(drift) > MAX_ALLOWED_DRIFT_S) {
-            player.currentTime = serverProgress;
-            player.playbackRate = 1.0;
-        } else if (Math.abs(drift) > 0.08) {
-            player.playbackRate = (drift > 0) ? 1.0 - PLAYBACK_RATE_ADJUST : 1.0 + PLAYBACK_RATE_ADJUST;
-        } else {
-            player.playbackRate = 1.0;
+        
+        // Handle case where queue was empty and now has content (e.g., after re-upload)
+        if (fileNameDisplay.classList.contains('uploading') && prevQueueLength === 0 && currentQueue.length > 0) {
+            fileNameDisplay.classList.remove('uploading');
+            // Show the first song in the newly populated queue
+            let item = currentQueue[0];
+            if (item) {
+                let displayName = item.filename_display || item.filename;
+                fileNameText.textContent = displayName
+                    .replace(/_/g, ' ')
+                    .replace(/\.(mp3|wav|ogg|flac|m4a)$/i, '');
+                fileNameText.title = displayName;
+            }
         }
     });
-
     socket.on('error', (data) => {
         alert(data.message);
         window.location.href = '/';
@@ -2476,14 +2526,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function nextSong() {
-        lastChangeDirection = 'next';
-        triggerFullscreenColorSlide('next');
+    lastChangeDirection = 'next';
+    manualDirection = 'next';
+    triggerFullscreenColorSlide('next');
         socket.emit('next_song', { room: roomId, auto_play: false });
     }
 
     function previousSong() {
-        lastChangeDirection = 'prev';
-        triggerFullscreenColorSlide('prev');
+    lastChangeDirection = 'prev';
+    manualDirection = 'prev';
+    triggerFullscreenColorSlide('prev');
         socket.emit('previous_song', { room: roomId });
     }
 
@@ -2587,8 +2639,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const overlay = document.getElementById('fullscreen-color-slide-overlay');
         if (!overlay) return;
 
-        // Get the stored direction or use the provided direction
-        const slideDirection = overlay.getAttribute('data-slide-direction') || direction;
+        // Get stored direction, manual override takes precedence
+        let slideDirection = overlay.getAttribute('data-slide-direction') || direction;
+        if (manualDirection && slideDirection !== manualDirection) {
+            console.log('[DIR] Overriding stored direction', slideDirection, 'with manualDirection', manualDirection);
+            slideDirection = manualDirection;
+        }
         
     // Function to apply the color slide animation
         const applyColorSlide = () => {
@@ -2597,12 +2653,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 const shades = getSecondaryColorOrShades(currentDominantColor, currentColorPalette);
                 
                 // Create body background gradient for the new theme
-                const bodyGradient = `linear-gradient(135deg, 
-                    rgb(${Math.max(0, shades.dark.r - 20)}, ${Math.max(0, shades.dark.g - 20)}, ${Math.max(0, shades.dark.b - 20)}), 
-                    rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}))`;
-                
-                // Set the overlay background
-                overlay.style.background = bodyGradient;
+                // Solid color (use darker shade) instead of gradient in fullscreen
+                const bodySolid = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
+                overlay.style.background = bodySolid;
 
                 // Prepare overlay: snap to start position without transition to prevent edge stutter
                 overlay.classList.add('no-transition');
@@ -2638,13 +2691,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     setTimeout(() => {
                         // Finalize: set body background to match the new theme after the slide finishes
                         if (document.body.classList.contains('fullscreen-mode')) {
-                            document.body.style.background = bodyGradient;
+                            document.body.style.background = bodySolid;
                         }
 
                         // Lock overlay in place behind UI
                         overlay.classList.remove('slide-in', 'slide-from-left', 'slide-from-right');
                         overlay.classList.add('stay-background');
                         overlay.removeAttribute('data-slide-direction');
+                        manualDirection = null; // consume after use
                         // Reset transform state for the next run
                         // Keep stay-background but ensure no lingering transition state
                         overlay.classList.add('no-transition');
@@ -2715,8 +2769,26 @@ document.addEventListener('DOMContentLoaded', () => {
 function toggleFullscreen() {
     if (!document.fullscreenElement) {
         document.documentElement.requestFullscreen().then(() => {
-            // Add fullscreen mode class when entering fullscreen
             document.body.classList.add('fullscreen-mode');
+            // If we already have a dominant color, apply complete theme and solid background immediately
+            if (currentDominantColor) {
+                applyTheme(currentDominantColor, currentColorPalette);
+                const [r,g,b] = currentDominantColor;
+                document.body.style.background = `rgb(${r}, ${g}, ${b})`;
+            }
+
+            // Ensure overlay is visible (clear inline none set on exit) and trigger a slide-in
+            const overlay = document.getElementById('fullscreen-color-slide-overlay');
+            if (overlay) {
+                overlay.style.display = ''; // allow CSS to control visibility in fullscreen-mode
+                overlay.classList.remove('stay-background');
+                const dir = lastChangeDirection || 'next';
+                triggerFullscreenColorSlide(dir);
+                // Small delay to ensure prep applied, then animate in
+                setTimeout(() => {
+                    triggerFullscreenColorSlideIn(dir);
+                }, 80);
+            }
         });
     } else {
         if (document.exitFullscreen) {
@@ -2726,18 +2798,23 @@ function toggleFullscreen() {
                 
                 // Reset background to default when exiting fullscreen
                 document.body.style.background = 'linear-gradient(135deg, var(--background-color-start), var(--background-color-end))';
-                
+
                 // Clean up any fullscreen overlay
                 const overlay = document.getElementById('fullscreen-color-slide-overlay');
                 if (overlay) {
                     overlay.classList.remove('slide-from-right', 'slide-from-left', 'slide-in', 'slide-out-right', 'slide-out-left', 'stay-background');
                     overlay.style.background = '';
+                    overlay.style.display = 'none';
                     overlay.removeAttribute('data-slide-direction');
+                    // Force reflow to ensure background changes take effect immediately
+                    void document.body.offsetWidth;
                 }
                 const coverSection = document.querySelector('.cover-section');
                 if (coverSection) {
                     coverSection.classList.remove('fullscreen-cover-next-in', 'fullscreen-cover-prev-in');
                 }
+                // Reapply theme immediately so gradient appears without requiring user interaction
+                updateThemeForPlayingState();
             });
         }
     }
@@ -2749,19 +2826,45 @@ document.addEventListener('fullscreenchange', () => {
         // Exited fullscreen, remove the mode class
         document.body.classList.remove('fullscreen-mode');
         
-    // Reset background to default when exiting fullscreen
-    document.body.style.background = 'linear-gradient(135deg, var(--background-color-start), var(--background-color-end))';
+        // Reset background to default when exiting fullscreen
+        document.body.style.background = 'linear-gradient(135deg, var(--background-color-start), var(--background-color-end))';
         
         // Clean up any fullscreen overlay
         const overlay = document.getElementById('fullscreen-color-slide-overlay');
         if (overlay) {
             overlay.classList.remove('slide-from-right', 'slide-from-left', 'slide-in', 'slide-out-right', 'slide-out-left', 'stay-background');
             overlay.style.background = '';
+            overlay.style.display = 'none';
             overlay.removeAttribute('data-slide-direction');
+            // Force reflow to ensure background changes take effect immediately
+            void document.body.offsetWidth;
         }
         const coverSection = document.querySelector('.cover-section');
         if (coverSection) {
             coverSection.classList.remove('fullscreen-cover-next-in', 'fullscreen-cover-prev-in');
+        }
+        // Ensure theme is re-applied so gradient shows immediately
+        updateThemeForPlayingState();
+    } else {
+        // Entered fullscreen, add the mode class and set solid background
+        document.body.classList.add('fullscreen-mode');
+        if (currentDominantColor) {
+            // Apply complete theme including solid background for fullscreen
+            applyTheme(currentDominantColor, currentColorPalette);
+            const [r,g,b] = currentDominantColor;
+            document.body.style.background = `rgb(${r}, ${g}, ${b})`;
+        }
+
+        // Ensure overlay is visible and trigger slide animation
+        const overlay2 = document.getElementById('fullscreen-color-slide-overlay');
+        if (overlay2) {
+            overlay2.style.display = '';
+            overlay2.classList.remove('stay-background');
+            const dir2 = lastChangeDirection || 'next';
+            triggerFullscreenColorSlide(dir2);
+            setTimeout(() => {
+                triggerFullscreenColorSlideIn(dir2);
+            }, 80);
         }
     }
 });
@@ -2862,31 +2965,43 @@ document.addEventListener('fullscreenchange', () => {
     } else {
     // Ensure idle class is cleared when exiting fullscreen
     document.body.classList.remove('fullscreen-idle');
-        // Always restore progress bar when exiting fullscreen, regardless of state
-        const customPlayer = document.querySelector('.custom-player');
-        const progressBarContainer = document.querySelector('.progress-bar-container');
-        const playerTimeDisplay = document.querySelector('.player-time-display');
-        if (customPlayer) customPlayer.classList.remove('fullscreen-hide');
-        if (progressBarContainer) {
-            progressBarContainer.classList.remove('progress-bar-only');
-            // Ensure progress bar is back in its proper position
-            if (!customPlayer.contains(progressBarContainer)) {
-                // Insert after player-time-display, which is the correct position
-                if (playerTimeDisplay && playerTimeDisplay.nextSibling) {
-                    customPlayer.insertBefore(progressBarContainer, playerTimeDisplay.nextSibling);
-                } else {
-                    // Fallback: insert before main-player-row
-                    const mainPlayerRow = customPlayer.querySelector('.main-player-row');
-                    if (mainPlayerRow) {
-                        customPlayer.insertBefore(progressBarContainer, mainPlayerRow);
+            // Reset background to gradient when exiting fullscreen
+            document.body.style.background = 'linear-gradient(135deg, var(--background-color-start), var(--background-color-end))';
+            // Always restore progress bar when exiting fullscreen, regardless of state
+            const customPlayer = document.querySelector('.custom-player');
+            const progressBarContainer = document.querySelector('.progress-bar-container');
+            const playerTimeDisplay = document.querySelector('.player-time-display');
+            if (customPlayer) customPlayer.classList.remove('fullscreen-hide');
+            if (progressBarContainer) {
+                progressBarContainer.classList.remove('progress-bar-only');
+                // Ensure progress bar is back in its proper position
+                if (!customPlayer.contains(progressBarContainer)) {
+                    // Insert after player-time-display, which is the correct position
+                    if (playerTimeDisplay && playerTimeDisplay.nextSibling) {
+                        customPlayer.insertBefore(progressBarContainer, playerTimeDisplay.nextSibling);
                     } else {
-                        customPlayer.appendChild(progressBarContainer);
+                        // Fallback: insert before main-player-row
+                        const mainPlayerRow = customPlayer.querySelector('.main-player-row');
+                        if (mainPlayerRow) {
+                            customPlayer.insertBefore(progressBarContainer, mainPlayerRow);
+                        } else {
+                            customPlayer.appendChild(progressBarContainer);
+                        }
                     }
                 }
             }
+            isPlayerHidden = false;
+            if (fullscreenIdleTimer) clearTimeout(fullscreenIdleTimer);
+            // Clean up overlay and force reflow & reapply theme
+            const overlay2 = document.getElementById('fullscreen-color-slide-overlay');
+            if (overlay2) {
+                overlay2.classList.remove('slide-from-right', 'slide-from-left', 'slide-in', 'slide-out-right', 'slide-out-left', 'stay-background');
+                overlay2.style.background = '';
+                overlay2.style.display = 'none';
+                overlay2.removeAttribute('data-slide-direction');
+                void document.body.offsetWidth;
+            }
+            updateThemeForPlayingState();
         }
-        isPlayerHidden = false;
-        if (fullscreenIdleTimer) clearTimeout(fullscreenIdleTimer);
-    }
-});
+    });
 });
