@@ -12,7 +12,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const closeQueueBtn = document.getElementById('close-queue');
     const queueList = document.getElementById('queue-list');
     const fileNameDisplay = document.getElementById('file-name');
-    const fileNameText = document.getElementById('file-name-text');
+    const songTitleElement = document.getElementById('song-title');
+    const songArtistElement = document.getElementById('song-artist');
     const coverArt = document.getElementById('cover-art');
     const coverArtPlaceholder = document.getElementById('cover-art-placeholder');
     const controlButtons = document.querySelectorAll('.control-button');
@@ -994,7 +995,8 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Truncate filename for display during upload to prevent overflow
             const truncatedName = truncateFilename(file.name, 35); // Shorter limit for "Uploading: " prefix
-            fileNameText.textContent = `Uploading: ${truncatedName}`;
+            songTitleElement.textContent = `Uploading: ${truncatedName}`;
+            songArtistElement.textContent = "";
             
             const formData = new FormData();
             formData.append('audio', file);
@@ -1016,14 +1018,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     } else {
                         console.error('Upload failed:', data.error);
                         alert(data.error || 'Upload failed.');
-                        fileNameText.textContent = 'Upload failed.';
+                        songTitleElement.textContent = 'Upload failed.';
+                        songArtistElement.textContent = "";
                     }
                 }).catch(error => {
                     console.error('Upload fetch error:', error);
                     // Remove uploading class on error
                     fileNameDisplay.classList.remove('uploading');
                     alert('An unexpected error occurred during upload.');
-                    fileNameText.textContent = 'Upload error.';
+                    songTitleElement.textContent = 'Upload error.';
+                    songArtistElement.textContent = "";
                 });
         });
     } else {
@@ -1114,6 +1118,13 @@ document.addEventListener('DOMContentLoaded', () => {
         fileNameDisplay.classList.remove('playing');
         hideCoverDancingBars();
         updateFileNameAnimation(); // Recalculate for paused state
+        updateThemeForPlayingState();
+        // Ensure fullscreen contrast is maintained after pause
+        if (document.body.classList.contains('fullscreen-mode')) {
+            setTimeout(() => {
+                ensureFullscreenContrast();
+            }, 100);
+        }
         socket.emit('pause', { room: roomId });
     });
 
@@ -1246,7 +1257,13 @@ document.addEventListener('DOMContentLoaded', () => {
         hideCoverDancingBars();
         updateFileNameAnimation(); // Recalculate layout for paused state
         updateThemeForPlayingState();
-    updateCoverPositionVars();
+        // Ensure fullscreen contrast is maintained after pause
+        if (document.body.classList.contains('fullscreen-mode')) {
+            setTimeout(() => {
+                ensureFullscreenContrast();
+            }, 200);
+        }
+        updateCoverPositionVars();
         setTimeout(() => { isReceivingUpdate = false; }, 150);
     });
 
@@ -1292,7 +1309,14 @@ document.addEventListener('DOMContentLoaded', () => {
         // Use display filename if available, otherwise fallback to filename
         const displayFilename = data.filename_display || data.filename;
         console.log('[DEBUG] Final display filename for loadAudio:', JSON.stringify(displayFilename));
-        loadAudio(data.filename, data.cover, displayFilename);
+        loadAudio(data.filename, data.cover, displayFilename, data.title, data.artist);
+        
+        // Ensure fullscreen contrast after song change
+        if (document.body.classList.contains('fullscreen-mode')) {
+            setTimeout(() => {
+                ensureFullscreenContrast();
+            }, 500); // Longer delay to allow theme to apply first
+        }
     });
 
     socket.on('room_state', (data) => {
@@ -1327,14 +1351,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Clear fixed colors so new theme can apply
                 const mainHeadingEl = document.querySelector('.main-heading');
                 const roomCodeEl = document.querySelector('.room-code-display');
-                const fileNameEl = document.querySelector('#file-name-text');
+                const titleEl = document.querySelector('#song-title');
+                const artistEl = document.querySelector('#song-artist');
                 if (mainHeadingEl) mainHeadingEl.removeAttribute('data-fixed-color');
                 if (roomCodeEl) {
                     roomCodeEl.removeAttribute('data-fixed-color');
                     const span = roomCodeEl.querySelector('span');
                     if (span) span.removeAttribute('data-fixed-color');
                 }
-                if (fileNameEl) fileNameEl.removeAttribute('data-fixed-color');
+                if (titleEl) titleEl.removeAttribute('data-fixed-color');
+                if (artistEl) artistEl.removeAttribute('data-fixed-color');
             }
             
             // Update current song tracker
@@ -1342,7 +1368,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Use display filename if available, otherwise fallback to filename
             const displayFilename = data.current_file_display || data.current_file;
-            loadAudio(data.current_file, data.current_cover, displayFilename);
+            loadAudio(data.current_file, data.current_cover, displayFilename, data.current_title, data.current_artist);
             let intendedTime = data.last_progress_s;
             if (data.is_playing) {
                 const timeSinceUpdate = (Date.now() + serverTimeOffset) / 1000 - data.last_updated_at;
@@ -1375,6 +1401,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     lastChangeDirection = null; // reset after triggering
                 }, 100); // slight delay to allow loadAudio to start image load
             }
+            
+            // Ensure fullscreen contrast after room state change
+            if (document.body.classList.contains('fullscreen-mode')) {
+                setTimeout(() => {
+                    ensureFullscreenContrast();
+                }, 600); // Longer delay to allow all theme changes to complete
+            }
         }
     });
 
@@ -1397,7 +1430,8 @@ document.addEventListener('DOMContentLoaded', () => {
             player.pause();
             player.src = '';
             player.load();
-            fileNameText.textContent = "No file selected.";
+            songTitleElement.textContent = "No file selected";
+            songArtistElement.textContent = "";
             fileNameDisplay.classList.remove('playing');
             hideCoverDancingBars();
             
@@ -1465,11 +1499,18 @@ document.addEventListener('DOMContentLoaded', () => {
             let item = currentQueue[currentQueueIndex];
             if (!item && currentQueue.length > 0) item = currentQueue[0];
             if (item) {
-                let displayName = item.filename_display || item.filename;
-                fileNameText.textContent = displayName
-                    .replace(/_/g, ' ')
-                    .replace(/\.(mp3|wav|ogg|flac|m4a)$/i, '');
-                fileNameText.title = displayName;
+                const title = item.title || (item.filename_display || item.filename).replace(/_/g, ' ').replace(/\.(mp3|wav|ogg|flac|m4a)$/i, '');
+                const artist = item.artist;
+                songTitleElement.textContent = title;
+                songTitleElement.title = title;
+                if (artist) {
+                    songArtistElement.textContent = artist;
+                    songArtistElement.title = artist;
+                    songArtistElement.style.display = 'block';
+                } else {
+                    songArtistElement.textContent = "";
+                    songArtistElement.style.display = 'none';
+                }
             }
         }
         
@@ -1479,11 +1520,18 @@ document.addEventListener('DOMContentLoaded', () => {
             // Show the first song in the newly populated queue
             let item = currentQueue[0];
             if (item) {
-                let displayName = item.filename_display || item.filename;
-                fileNameText.textContent = displayName
-                    .replace(/_/g, ' ')
-                    .replace(/\.(mp3|wav|ogg|flac|m4a)$/i, '');
-                fileNameText.title = displayName;
+                const title = item.title || (item.filename_display || item.filename).replace(/_/g, ' ').replace(/\.(mp3|wav|ogg|flac|m4a)$/i, '');
+                const artist = item.artist;
+                songTitleElement.textContent = title;
+                songTitleElement.title = title;
+                if (artist) {
+                    songArtistElement.textContent = artist;
+                    songArtistElement.title = artist;
+                    songArtistElement.style.display = 'block';
+                } else {
+                    songArtistElement.textContent = "";
+                    songArtistElement.style.display = 'none';
+                }
             }
         }
     });
@@ -1581,14 +1629,15 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     
-    function loadAudio(filename, cover, displayFilename = null) {
+    function loadAudio(filename, cover, displayFilename = null, title = null, artist = null) {
         console.log('[DEBUG] loadAudio called with filename:', JSON.stringify(filename));
         console.log('[DEBUG] loadAudio called with displayFilename:', JSON.stringify(displayFilename));
-        console.log('[DEBUG] loadAudio filename type:', typeof filename);
-        console.log('[DEBUG] loadAudio displayFilename type:', typeof displayFilename);
+        console.log('[DEBUG] loadAudio called with title:', JSON.stringify(title));
+        console.log('[DEBUG] loadAudio called with artist:', JSON.stringify(artist));
         
         if (!filename) {
-            fileNameText.textContent = "No file selected.";
+            songTitleElement.textContent = "No file selected";
+            songArtistElement.textContent = "";
             // Hide both cover art and placeholder when no file is selected
             coverArt.style.display = 'none';
             coverArt.src = '';
@@ -1603,23 +1652,39 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         
-        // Use display filename if provided, otherwise use the regular filename
-        let nameForDisplay = displayFilename || filename;
+        // Determine what to display for the title
+        let displayTitle = title || (displayFilename || filename);
         
-        console.log('[DEBUG] Name for display before processing:', JSON.stringify(nameForDisplay));
+        // Clean up the display title if it's from filename
+        if (!title) {
+            displayTitle = displayTitle
+                .replace(/_/g, " ")
+                .replace(/\.(mp3|wav|ogg|flac|m4a)$/i, "");
+        }
         
-        // Don't modify the display name - use it exactly as received
-        console.log('[DEBUG] Final display name:', JSON.stringify(nameForDisplay));
-        console.log('[DEBUG] Display name contains Japanese:', /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(nameForDisplay));
+        console.log('[DEBUG] Final display title:', JSON.stringify(displayTitle));
+        console.log('[DEBUG] Final display artist:', JSON.stringify(artist));
         
-        // Set the display text: remove underscores and common audio file extensions
-        let finalDisplayText = nameForDisplay
-            .replace(/_/g, " ")
-            .replace(/\.(mp3|wav|ogg|flac|m4a)$/i, "");
-        console.log('[DEBUG] Final display text:', JSON.stringify(finalDisplayText));
+        // Set the song info
+        songTitleElement.textContent = displayTitle;
+        songTitleElement.title = displayTitle;
         
-        fileNameText.title = finalDisplayText;
-        fileNameText.textContent = finalDisplayText;
+        if (artist) {
+            songArtistElement.textContent = artist;
+            songArtistElement.title = artist;
+            songArtistElement.style.display = 'block';
+        } else {
+            songArtistElement.textContent = "";
+            songArtistElement.style.display = 'none';
+        }
+        
+        // Set document title
+        const docTitle = title && artist ? `${title} - ${artist}` : displayTitle;
+        if (fileNameDisplay.classList.contains('playing')) {
+            document.title = docTitle || "AudioFlow";
+        } else {
+            document.title = "AudioFlow";
+        }
         // Always clear fixed colors before applying new theme
         const mainHeadingEl = document.querySelector('.main-heading');
         const roomCodeEl = document.querySelector('.room-code-display');
@@ -1629,11 +1694,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const span = roomCodeEl.querySelector('span');
             if (span) span.removeAttribute('data-fixed-color');
         }
-        if (fileNameText) fileNameText.removeAttribute('data-fixed-color');
+        if (songTitleElement) songTitleElement.removeAttribute('data-fixed-color');
+        if (songArtistElement) songArtistElement.removeAttribute('data-fixed-color');
+        
         player.src = `/uploads/${encodeURIComponent(filename)}`;
         player.load();
         fileNameDisplay.classList.remove('playing');
         coverArt.style.boxShadow = 'none';
+        hideCoverDancingBars();
+        resetTheme();
         hideCoverDancingBars();
         resetTheme();
     updateFileNameAnimation();
@@ -1660,6 +1729,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     coverArt.style.boxShadow = `0 0 15px rgba(${r},${g},${b},0.6), 0 0 35px rgba(${r},${g},${b},0.4)`;
                     applyTheme(dominantColor, palette);
                     updateCoverPositionVars();
+                    
+                    // Ensure text contrast in fullscreen mode
+                    setTimeout(() => {
+                        ensureFullscreenContrast();
+                    }, 100);
                     
                     // Setup 3D tilt effect for cover art
                     setup3DTiltEffect(coverArt);
@@ -1757,6 +1831,12 @@ document.addEventListener('DOMContentLoaded', () => {
         themeUpdateTimeout = setTimeout(() => {
             if (currentDominantColor) {
                 applyTheme(currentDominantColor, currentColorPalette);
+                // Re-ensure fullscreen contrast after theme update
+                if (document.body.classList.contains('fullscreen-mode')) {
+                    setTimeout(() => {
+                        ensureFullscreenContrast();
+                    }, 50);
+                }
             } else {
                 resetTheme();
             }
@@ -1881,7 +1961,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isDarkColor) {
             // If extracted color is dark, use light version for text/buttons
             textColor = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
-            buttonColor = `linear-gradient(90deg, rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b}), rgb(${Math.min(255, shades.light.r + 20)}, ${Math.min(255, shades.light.g + 20)}, ${Math.min(255, shades.light.b + 20)}))`;
+            buttonColor = `linear-gradient(90deg, rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b}), rgb(${Math.min(255, shades.light.r + 20)}, ${Math.min(255, shades.light.g + 20)}, ${Math.min(
+255, shades.light.b + 20)}))`;
             buttonTextColor = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
         } else {
             // If extracted color is light, use dark version for text/buttons
@@ -1894,53 +1975,60 @@ document.addEventListener('DOMContentLoaded', () => {
     const mainHeading = document.querySelector('.main-heading');
         const memberCount = document.querySelector('.member-count');
         const roomCodeDisplay = document.querySelector('.room-code-display');
-        const fileNameText = document.querySelector('#file-name-text');
+        const songTitleText = document.querySelector('#song-title');
+        const songArtistText = document.querySelector('#song-artist');
     let computedHeadingColor = null;
+
         
         if (mainHeading) {
-            // Check if heading has a fixed color from dancing bars
-            const fixedColor = mainHeading.getAttribute('data-fixed-color');
-            if (fixedColor) {
-                // Use the stored fixed color instead of calculating new one
-                mainHeading.style.removeProperty('background');
-                mainHeading.style.removeProperty('background-image');
-                mainHeading.style.removeProperty('-webkit-background-clip');
-                mainHeading.style.removeProperty('-webkit-text-fill-color');
-                mainHeading.style.removeProperty('background-clip');
-                mainHeading.style.color = fixedColor;
-                mainHeading.style.setProperty('color', fixedColor, 'important');
-                console.log(`Using fixed heading color: ${fixedColor}`);
-                computedHeadingColor = fixedColor;
-            } else {
-                // For the heading, use the opposite shade based on background brightness
-                // The background at the top is the light shade, so we need to consider its brightness
-                const topBrightness = getBrightness(shades.light.r, shades.light.g, shades.light.b);
-                let headingColor;
-                
-                if (topBrightness > 128) {
-                    // Light background at top - use dark color for heading
-                    headingColor = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
+            // Skip color application in fullscreen mode - will be handled by contrast function
+            if (!document.body.classList.contains('fullscreen-mode')) {
+                // Check if heading has a fixed color from dancing bars
+                const fixedColor = mainHeading.getAttribute('data-fixed-color');
+                if (fixedColor) {
+                    // Use the stored fixed color instead of calculating new one
+                    mainHeading.style.removeProperty('background');
+                    mainHeading.style.removeProperty('background-image');
+                    mainHeading.style.removeProperty('-webkit-background-clip');
+                    mainHeading.style.removeProperty('-webkit-text-fill-color');
+                    mainHeading.style.removeProperty('background-clip');
+                    mainHeading.style.color = fixedColor;
+                    mainHeading.style.setProperty('color', fixedColor, 'important');
+                    console.log(`Using fixed heading color: ${fixedColor}`);
+                    computedHeadingColor = fixedColor;
                 } else {
-                    // Dark background at top - use light color for heading
-                    headingColor = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
+                    // For the heading, use the opposite shade based on background brightness
+                    // The background at the top is the light shade, so we need to consider its brightness
+                    const topBrightness = getBrightness(shades.light.r, shades.light.g, shades.light.b);
+                    let headingColor;
+                    
+                    if (topBrightness > 128) {
+                        // Light background at top - use dark color for heading
+                        headingColor = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
+                    } else {
+                        // Dark background at top - use light color for heading
+                        headingColor = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
+                    }
+                    
+                    // Force clear any existing styles and apply new color
+                    mainHeading.style.removeProperty('background');
+                    mainHeading.style.removeProperty('background-image');
+                    mainHeading.style.removeProperty('-webkit-background-clip');
+                    mainHeading.style.removeProperty('-webkit-text-fill-color');
+                    mainHeading.style.removeProperty('background-clip');
+                    mainHeading.style.color = headingColor;
+                    mainHeading.style.setProperty('color', headingColor, 'important');
+                    
+                    console.log(`Heading color set to: ${headingColor} (top brightness: ${topBrightness})`);
+                    computedHeadingColor = headingColor;
                 }
-                
-                // Force clear any existing styles and apply new color
-                mainHeading.style.removeProperty('background');
-                mainHeading.style.removeProperty('background-image');
-                mainHeading.style.removeProperty('-webkit-background-clip');
-                mainHeading.style.removeProperty('-webkit-text-fill-color');
-                mainHeading.style.removeProperty('background-clip');
-                mainHeading.style.color = headingColor;
-                mainHeading.style.setProperty('color', headingColor, 'important');
-                
-                console.log(`Heading color set to: ${headingColor} (top brightness: ${topBrightness})`);
-                computedHeadingColor = headingColor;
             }
         }
         
-        if (memberCount) memberCount.style.color = textColor;
-        if (roomCodeDisplay) {
+        if (memberCount && !document.body.classList.contains('fullscreen-mode')) {
+            memberCount.style.color = textColor;
+        }
+        if (roomCodeDisplay && !document.body.classList.contains('fullscreen-mode')) {
             // Check if room code has a fixed color from dancing bars
             const fixedColor = roomCodeDisplay.getAttribute('data-fixed-color');
             if (fixedColor) {
@@ -1964,11 +2052,18 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
         // Match file name color to main heading if available
-        if (fileNameText) {
+        if (songTitleText && !document.body.classList.contains('fullscreen-mode')) {
             if (computedHeadingColor) {
-                fileNameText.style.setProperty('color', computedHeadingColor, 'important');
+                songTitleText.style.setProperty('color', computedHeadingColor, 'important');
             } else {
-                fileNameText.style.color = textColor;
+                songTitleText.style.color = textColor;
+            }
+        }
+        if (songArtistText && !document.body.classList.contains('fullscreen-mode')) {
+            if (computedHeadingColor) {
+                songArtistText.style.setProperty('color', computedHeadingColor, 'important');
+            } else {
+                songArtistText.style.color = textColor;
             }
         }
         
@@ -2215,9 +2310,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Store as data attribute for persistence
                 mainHeading.setAttribute('data-fixed-color', barColorForHeading);
             }
-            if (fileNameText) {
-                fileNameText.style.setProperty('color', barColorForHeading, 'important');
-                fileNameText.setAttribute('data-fixed-color', barColorForHeading);
+            if (songTitleText) {
+                songTitleText.style.setProperty('color', barColorForHeading, 'important');
+                songTitleText.setAttribute('data-fixed-color', barColorForHeading);
+            }
+            if (songArtistText) {
+                songArtistText.style.setProperty('color', barColorForHeading, 'important');
+                songArtistText.setAttribute('data-fixed-color', barColorForHeading);
             }
             if (roomCodeDisplay) {
                 roomCodeDisplay.style.setProperty('color', barColorForHeading, 'important');
@@ -2230,6 +2329,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     roomCodeSpan.style.setProperty('color', barColorForHeading, 'important');
                     roomCodeSpan.setAttribute('data-fixed-color', barColorForHeading);
                 }
+            }
+            
+            // Override with fullscreen contrast if needed
+            if (document.body.classList.contains('fullscreen-mode')) {
+                setTimeout(() => {
+                    ensureFullscreenContrast();
+                }, 50);
             }
             
             document.querySelectorAll('.cover-dancing-bars .bar').forEach(bar => {
@@ -2246,9 +2352,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 bar.style.boxShadow = '';
             });
         }
+        
+        // Apply fullscreen contrast after all theme colors are set
+        if (document.body.classList.contains('fullscreen-mode')) {
+            setTimeout(() => {
+                ensureFullscreenContrast();
+            }, 50);
+        }
     }
 
     function resetTheme() {
+        // Don't reset anything if we're in fullscreen mode
+        if (document.body.classList.contains('fullscreen-mode')) {
+            return;
+        }
+        
         // Reset container background to default
         const container = document.querySelector('.container');
         if (container) {
@@ -2261,7 +2379,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const mainHeading = document.querySelector('.main-heading');
         const memberCount = document.querySelector('.member-count');
         const roomCodeDisplay = document.querySelector('.room-code-display');
-        const fileNameText = document.querySelector('#file-name-text');
+        const songTitleText = document.querySelector('#song-title');
+        const songArtistText = document.querySelector('#song-artist');
         
         if (mainHeading) {
             // Only reset if no fixed color is stored
@@ -2291,13 +2410,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         }
-        if (fileNameText) {
-            const fixedColor = fileNameText.getAttribute('data-fixed-color');
+        if (songTitleText) {
+            const fixedColor = songTitleText.getAttribute('data-fixed-color');
             if (!fixedColor) {
-                fileNameText.style.removeProperty('color');
+                songTitleText.style.removeProperty('color');
             }
         }
-        if (fileNameText) fileNameText.style.color = '';
+        if (songArtistText) {
+            const fixedColor = songArtistText.getAttribute('data-fixed-color');
+            if (!fixedColor) {
+                songArtistText.style.removeProperty('color');
+            }
+        }
         
         // Reset cover art placeholder styling
         if (coverArtPlaceholder) {
@@ -2736,33 +2860,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function updateFileNameAnimation() {
-        if (!fileNameText || !fileNameDisplay) return;
-        
-        const containerWidth = fileNameDisplay.offsetWidth - 40; // Account for padding
-        const textWidth = fileNameText.scrollWidth;
-        
-        // Remove existing classes
-        fileNameText.classList.remove('long');
-        fileNameDisplay.classList.remove('is-overflowing');
-        
-        // Reset animation styles
-        fileNameText.style.removeProperty('--slide-duration');
-        fileNameText.style.removeProperty('--slide-distance');
-        
-        if (textWidth > containerWidth) {
-            // Text is overflowing, set up animation
-            fileNameDisplay.classList.add('is-overflowing');
-            fileNameText.classList.add('long');
-            
-            const slideDistance = -(textWidth - containerWidth + 20); // Extra space for smooth transition
-            const duration = Math.max(8, Math.abs(slideDistance) / 10); // Increased divisor for faster animation
-            
-            fileNameText.style.setProperty('--slide-distance', `${slideDistance}px`);
-            fileNameText.style.setProperty('--slide-duration', `${duration}s`);
-        }
-    }
-
     // ===============================
 // Fullscreen Toggle Button Logic
 // ===============================
@@ -2775,6 +2872,10 @@ function toggleFullscreen() {
                 applyTheme(currentDominantColor, currentColorPalette);
                 const [r,g,b] = currentDominantColor;
                 document.body.style.background = `rgb(${r}, ${g}, ${b})`;
+                // Ensure text is visible in fullscreen - delay to allow DOM updates
+                setTimeout(() => {
+                    ensureFullscreenContrast();
+                }, 100);
             }
 
             // Ensure overlay is visible (clear inline none set on exit) and trigger a slide-in
@@ -2999,9 +3100,80 @@ document.addEventListener('fullscreenchange', () => {
                 overlay2.style.background = '';
                 overlay2.style.display = 'none';
                 overlay2.removeAttribute('data-slide-direction');
+                // Force reflow to ensure background changes take effect immediately
                 void document.body.offsetWidth;
             }
             updateThemeForPlayingState();
         }
     });
 });
+
+// Ensures text and background colors are not too similar in fullscreen
+function ensureFullscreenContrast() {
+    if (!document.body.classList.contains('fullscreen-mode')) return;
+    console.log('Checking fullscreen contrast...');
+    const mainHeading = document.querySelector('.main-heading'); // This is the "Audioflow" heading
+    const songTitleText = document.querySelector('#song-title');
+    const songArtistText = document.querySelector('#song-artist');
+    const roomCodeDisplay = document.querySelector('.room-code-display');
+    const audioflowHeading = document.querySelector('h1.main-heading'); // More specific selector
+    const memberCount = document.querySelector('.member-count'); // Member count element
+    const bodyBg = window.getComputedStyle(document.body).backgroundColor;
+    console.log('Body background color:', bodyBg);
+    
+    const bgBrightness = getCssColorBrightness(bodyBg);
+    const contrastColor = bgBrightness > 128 ? 'black' : 'white';
+    console.log(`Background brightness: ${bgBrightness}, using contrast color: ${contrastColor}`);
+    
+    // Force apply contrast color to ALL text elements regardless of similarity check
+    [mainHeading, fileNameText, roomCodeDisplay, audioflowHeading, memberCount].forEach(el => {
+        if (!el) return;
+        console.log(`Force setting ${el.className || el.id || el.tagName} to ${contrastColor}`);
+        el.style.setProperty('color', contrastColor, 'important');
+        // Remove any conflicting attributes and CSS properties that might override
+        el.removeAttribute('data-fixed-color');
+        el.style.removeProperty('background');
+        el.style.removeProperty('background-image');
+        el.style.removeProperty('-webkit-background-clip');
+        el.style.removeProperty('-webkit-text-fill-color');
+        el.style.removeProperty('background-clip');
+    });
+    
+    // Also handle room code span separately
+    const roomCodeSpan = roomCodeDisplay?.querySelector('span');
+    if (roomCodeSpan) {
+        roomCodeSpan.style.setProperty('color', contrastColor, 'important');
+        roomCodeSpan.removeAttribute('data-fixed-color');
+    }
+}
+
+// Returns true if two CSS color strings are visually similar
+function isColorSimilar(c1, c2) {
+    const rgb1 = parseCssColor(c1);
+    const rgb2 = parseCssColor(c2);
+    if (!rgb1 || !rgb2) return false;
+    // Use Euclidean distance in RGB space
+    const dist = Math.sqrt(
+        Math.pow(rgb1[0] - rgb2[0], 2) +
+        Math.pow(rgb1[1] - rgb2[1], 2) +
+        Math.pow(rgb1[2] - rgb2[2], 2)
+    );
+    return dist < 80; // threshold for similarity (increased from 60)
+}
+
+// Parses a CSS rgb/rgba color string to [r,g,b]
+function parseCssColor(str) {
+    if (!str) return null;
+    const match = str.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if (match) {
+        return [parseInt(match[1]), parseInt(match[2]), parseInt(match[3])];
+    }
+    return null;
+}
+
+// Gets brightness of a CSS rgb/rgba color string
+function getCssColorBrightness(str) {
+    const rgb = parseCssColor(str);
+    if (!rgb) return 255;
+    return (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
+}
