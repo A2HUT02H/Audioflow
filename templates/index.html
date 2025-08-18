@@ -58,52 +58,58 @@
         </div>
 
         <div id="file-name" class="file-status">
-            <span id="file-name-text">No file selected</span>
+            <div id="song-title">No file selected</div>
+            <div id="song-artist"></div>
             <script>
             // Add 'long' class if file name is too long and set animation distance
             function updateFileNameAnimation() {
-                const el = document.getElementById('file-name-text');
+                const titleEl = document.getElementById('song-title');
+                const artistEl = document.getElementById('song-artist');
                 const container = document.getElementById('file-name');
-                if (!el || !container) return;
+                if (!titleEl || !container) return;
 
                 const SCROLL_SPEED_PPS = 50; // Pixels per second (consistent speed)
                 const MIN_ANIMATION_DURATION = 6; // Minimum duration in seconds
                 const PAUSE_RATIO = 0.3; // 30% of time spent pausing (split between positions)
 
-                requestAnimationFrame(() => {
-                    // Reset properties to get accurate measurements
-                    el.classList.remove('long');
-                    container.classList.remove('is-overflowing');
-                    el.style.removeProperty('--slide-distance');
-                    el.style.removeProperty('--slide-duration');
+                [titleEl, artistEl].forEach(el => {
+                    if (!el) return;
+                    
+                    requestAnimationFrame(() => {
+                        // Reset properties to get accurate measurements
+                        el.classList.remove('long');
+                        container.classList.remove('is-overflowing');
+                        el.style.removeProperty('--slide-distance');
+                        el.style.removeProperty('--slide-duration');
 
-                    // Force a reflow to apply the reset
-                    void el.offsetWidth;
+                        // Force a reflow to apply the reset
+                        void el.offsetWidth;
 
-                    const containerWidth = container.offsetWidth;
-                    const textWidth = el.scrollWidth;
-                    const isOverflowing = textWidth > containerWidth;
+                        const containerWidth = container.offsetWidth;
+                        const textWidth = el.scrollWidth;
+                        const isOverflowing = textWidth > containerWidth;
 
-                    if (isOverflowing) {
-                        el.classList.add('long');
-                        container.classList.add('is-overflowing');
+                        if (isOverflowing) {
+                            el.classList.add('long');
+                            container.classList.add('is-overflowing');
 
-                        // Calculate the exact distance needed to show the full text
-                        // Move text so that the end of the text aligns with the end of the container
-                        const slideDistance = textWidth - containerWidth;
-                        el.style.setProperty('--slide-distance', `-${slideDistance}px`);
+                            // Calculate the exact distance needed to show the full text
+                            // Move text so that the end of the text aligns with the end of the container
+                            const slideDistance = textWidth - containerWidth;
+                            el.style.setProperty('--slide-distance', `-${slideDistance}px`);
 
-                        // Calculate duration: movement time (both directions) + pause time
-                        // Since we're moving back and forth, we need time for both directions
-                        const onewayMoveDuration = slideDistance / SCROLL_SPEED_PPS;
-                        const totalMoveDuration = onewayMoveDuration * 2; // Back and forth
-                        const totalDuration = Math.max(totalMoveDuration / (1 - PAUSE_RATIO), MIN_ANIMATION_DURATION);
-                        el.style.setProperty('--slide-duration', `${totalDuration}s`);
-                        
-                        console.log(`Text sliding back-and-forth: ${slideDistance.toFixed(0)}px over ${totalDuration.toFixed(1)}s at ${SCROLL_SPEED_PPS}px/s`);
-                    } else {
-                        console.log(`Text fits: ${textWidth}px <= ${containerWidth}px`);
-                    }
+                            // Calculate duration: movement time (both directions) + pause time
+                            // Since we're moving back and forth, we need time for both directions
+                            const onewayMoveDuration = slideDistance / SCROLL_SPEED_PPS;
+                            const totalMoveDuration = onewayMoveDuration * 2; // Back and forth
+                            const totalDuration = Math.max(totalMoveDuration / (1 - PAUSE_RATIO), MIN_ANIMATION_DURATION);
+                            el.style.setProperty('--slide-duration', `${totalDuration}s`);
+                            
+                            console.log(`Text sliding back-and-forth: ${slideDistance.toFixed(0)}px over ${totalDuration.toFixed(1)}s at ${SCROLL_SPEED_PPS}px/s`);
+                        } else {
+                            console.log(`Text fits: ${textWidth}px <= ${containerWidth}px`);
+                        }
+                    });
                 });
             }
             window.addEventListener('DOMContentLoaded', updateFileNameAnimation);
