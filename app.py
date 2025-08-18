@@ -74,6 +74,55 @@ def allowed_file(filename):
     """Check if the file's extension is in the allowed list."""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def extract_metadata(file_path):
+    """
+    Extracts metadata (title, artist, album) from an audio file.
+    Returns a dictionary with metadata or fallback values.
+    """
+    try:
+        audio = MutagenFile(file_path)
+        if not audio:
+            return {}
+        
+        metadata = {}
+        
+        # Extract title
+        title = None
+        if hasattr(audio, 'tags') and audio.tags:
+            # Try different tag formats
+            for tag_key in ['TIT2', 'TITLE', '\xa9nam', 'Title']:
+                if tag_key in audio.tags:
+                    title = str(audio.tags[tag_key][0]) if isinstance(audio.tags[tag_key], list) else str(audio.tags[tag_key])
+                    break
+        
+        # Extract artist
+        artist = None
+        if hasattr(audio, 'tags') and audio.tags:
+            # Try different tag formats
+            for tag_key in ['TPE1', 'ARTIST', '\xa9ART', 'Artist']:
+                if tag_key in audio.tags:
+                    artist = str(audio.tags[tag_key][0]) if isinstance(audio.tags[tag_key], list) else str(audio.tags[tag_key])
+                    break
+        
+        # Extract album
+        album = None
+        if hasattr(audio, 'tags') and audio.tags:
+            # Try different tag formats
+            for tag_key in ['TALB', 'ALBUM', '\xa9alb', 'Album']:
+                if tag_key in audio.tags:
+                    album = str(audio.tags[tag_key][0]) if isinstance(audio.tags[tag_key], list) else str(audio.tags[tag_key])
+                    break
+        
+        metadata['title'] = title.strip() if title else None
+        metadata['artist'] = artist.strip() if artist else None
+        metadata['album'] = album.strip() if album else None
+        
+        return metadata
+        
+    except Exception as e:
+        print(f"Could not extract metadata from {os.path.basename(file_path)}: {e}")
+        return {}
+
 def extract_cover_art(file_path):
     """
     Extracts cover art data and extension from an audio file.
@@ -129,6 +178,24 @@ def extract_cover_art(file_path):
 # =================================================================================
 # Flask Routes
 # =================================================================================
+
+@app.route('/metadata/<path:filename>')
+def get_metadata(filename):
+    """Get metadata for an existing audio file."""
+    try:
+        import urllib.parse
+        decoded_filename = urllib.parse.unquote(filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], decoded_filename)
+        
+        if not os.path.exists(file_path):
+            return jsonify({'error': 'File not found'}), 404
+            
+        metadata = extract_metadata(file_path)
+        return jsonify(metadata)
+        
+    except Exception as e:
+        print(f"Error getting metadata for {filename}: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/uploads/<path:filename>')
 def serve_file(filename):
@@ -189,6 +256,10 @@ def upload():
         file.save(file_path)
         print(f"[Room {room}] - File saved: {filename}")
 
+        # Extract metadata
+        metadata = extract_metadata(file_path)
+        print(f"[Room {room}] - Metadata extracted: {metadata}")
+
         final_cover_filename = None
         # Extract cover art
         cover_data, cover_ext = extract_cover_art(file_path)
@@ -209,7 +280,10 @@ def upload():
                 'filename': filename,
                 'filename_display': original_filename,
                 'cover': final_cover_filename,
-                'upload_time': time.time()
+                'upload_time': time.time(),
+                'title': metadata.get('title'),
+                'artist': metadata.get('artist'),
+                'album': metadata.get('album')
             }
             
             # Initialize queue if it doesn't exist
@@ -228,6 +302,9 @@ def upload():
                     'current_file': filename,
                     'current_file_display': original_filename,
                     'current_cover': final_cover_filename,
+                    'current_title': metadata.get('title'),
+                    'current_artist': metadata.get('artist'),
+                    'current_album': metadata.get('album'),
                     'is_playing': False,
                     'last_progress_s': 0,
                     'last_updated_at': time.time(),
@@ -237,7 +314,10 @@ def upload():
                 emit_data = {
                     'filename': filename, 
                     'filename_display': original_filename,
-                    'cover': final_cover_filename
+                    'cover': final_cover_filename,
+                    'title': metadata.get('title'),
+                    'artist': metadata.get('artist'),
+                    'album': metadata.get('album')
                 }
                 socketio.emit('new_file', emit_data, to=room)
                 socketio.emit('pause', {'time': 0}, to=room)
@@ -264,8 +344,16 @@ def get_current_song():
     room = request.args.get('room')
     if room and room in rooms_data:
         with thread_lock:
-            return jsonify(rooms_data[room])
-    return jsonify({'filename': None, 'cover': None})
+            room_data = rooms_data[room].copy()
+            # Ensure metadata fields exist
+            if 'current_title' not in room_data:
+                room_data['current_title'] = None
+            if 'current_artist' not in room_data:
+                room_data['current_artist'] = None
+            if 'current_album' not in room_data:
+                room_data['current_album'] = None
+            return jsonify(room_data)
+    return jsonify({'filename': None, 'cover': None, 'title': None, 'artist': None, 'album': None})
 
 @app.route('/queue/<string:room_id>')
 def get_queue(room_id):
@@ -297,6 +385,9 @@ def play_from_queue(room_id, index):
             'current_file': audio_item['filename'],
             'current_file_display': audio_item['filename_display'],
             'current_cover': audio_item['cover'],
+            'current_title': audio_item.get('title'),
+            'current_artist': audio_item.get('artist'),
+            'current_album': audio_item.get('album'),
             'current_index': index,
             'is_playing': False,
             'last_progress_s': 0,
@@ -307,7 +398,10 @@ def play_from_queue(room_id, index):
     emit_data = {
         'filename': audio_item['filename'],
         'filename_display': audio_item['filename_display'],
-        'cover': audio_item['cover']
+        'cover': audio_item['cover'],
+        'title': audio_item.get('title'),
+        'artist': audio_item.get('artist'),
+        'album': audio_item.get('album')
     }
     socketio.emit('new_file', emit_data, to=room_id)
     socketio.emit('pause', {'time': 0}, to=room_id)
@@ -345,11 +439,21 @@ def remove_from_queue(room_id, index):
                     'current_file': None,
                     'current_file_display': None,
                     'current_cover': None,
+                    'current_title': None,
+                    'current_artist': None,
+                    'current_album': None,
                     'current_index': -1,
                     'is_playing': False,
                     'last_progress_s': 0,
                 })
-                socketio.emit('new_file', {'filename': None, 'filename_display': None, 'cover': None}, to=room_id)
+                socketio.emit('new_file', {
+                    'filename': None, 
+                    'filename_display': None, 
+                    'cover': None,
+                    'title': None,
+                    'artist': None,
+                    'album': None
+                }, to=room_id)
             elif index < len(queue):
                 # Play the next song (which is now at the same index)
                 audio_item = queue[index]
@@ -357,6 +461,9 @@ def remove_from_queue(room_id, index):
                     'current_file': audio_item['filename'],
                     'current_file_display': audio_item['filename_display'],
                     'current_cover': audio_item['cover'],
+                    'current_title': audio_item.get('title'),
+                    'current_artist': audio_item.get('artist'),
+                    'current_album': audio_item.get('album'),
                     'current_index': index,
                     'is_playing': False,
                     'last_progress_s': 0,
@@ -364,7 +471,10 @@ def remove_from_queue(room_id, index):
                 socketio.emit('new_file', {
                     'filename': audio_item['filename'],
                     'filename_display': audio_item['filename_display'],
-                    'cover': audio_item['cover']
+                    'cover': audio_item['cover'],
+                    'title': audio_item.get('title'),
+                    'artist': audio_item.get('artist'),
+                    'album': audio_item.get('album')
                 }, to=room_id)
             else:
                 # Play the previous song (index decreased by 1)
@@ -374,6 +484,9 @@ def remove_from_queue(room_id, index):
                     'current_file': audio_item['filename'],
                     'current_file_display': audio_item['filename_display'],
                     'current_cover': audio_item['cover'],
+                    'current_title': audio_item.get('title'),
+                    'current_artist': audio_item.get('artist'),
+                    'current_album': audio_item.get('album'),
                     'current_index': new_index,
                     'is_playing': False,
                     'last_progress_s': 0,
@@ -381,7 +494,10 @@ def remove_from_queue(room_id, index):
                 socketio.emit('new_file', {
                     'filename': audio_item['filename'],
                     'filename_display': audio_item['filename_display'],
-                    'cover': audio_item['cover']
+                    'cover': audio_item['cover'],
+                    'title': audio_item.get('title'),
+                    'artist': audio_item.get('artist'),
+                    'album': audio_item.get('album')
                 }, to=room_id)
         elif index < current_index:
             # Adjust current_index down by 1
@@ -605,6 +721,9 @@ def handle_next_song(data):
             'current_file': audio_item['filename'],
             'current_file_display': audio_item['filename_display'],
             'current_cover': audio_item['cover'],
+            'current_title': audio_item.get('title'),
+            'current_artist': audio_item.get('artist'),
+            'current_album': audio_item.get('album'),
             'current_index': next_index,
             'is_playing': auto_play,
             'last_progress_s': 0,
@@ -614,7 +733,10 @@ def handle_next_song(data):
     emit_data = {
         'filename': audio_item['filename'],
         'filename_display': audio_item['filename_display'],
-        'cover': audio_item['cover']
+        'cover': audio_item['cover'],
+        'title': audio_item.get('title'),
+        'artist': audio_item.get('artist'),
+        'album': audio_item.get('album')
     }
     socketio.emit('new_file', emit_data, to=room)
 
@@ -655,6 +777,9 @@ def handle_previous_song(data):
             'current_file': audio_item['filename'],
             'current_file_display': audio_item['filename_display'],
             'current_cover': audio_item['cover'],
+            'current_title': audio_item.get('title'),
+            'current_artist': audio_item.get('artist'),
+            'current_album': audio_item.get('album'),
             'current_index': prev_index,
             'is_playing': auto_play,
             'last_progress_s': 0,
@@ -664,7 +789,10 @@ def handle_previous_song(data):
     emit_data = {
         'filename': audio_item['filename'],
         'filename_display': audio_item['filename_display'],
-        'cover': audio_item['cover']
+        'cover': audio_item['cover'],
+        'title': audio_item.get('title'),
+        'artist': audio_item.get('artist'),
+        'album': audio_item.get('album')
     }
     socketio.emit('new_file', emit_data, to=room)
 
@@ -767,6 +895,9 @@ def handle_shuffle_next(data):
             'current_file': audio_item['filename'],
             'current_file_display': audio_item['filename_display'],
             'current_cover': audio_item['cover'],
+            'current_title': audio_item.get('title'),
+            'current_artist': audio_item.get('artist'),
+            'current_album': audio_item.get('album'),
             'current_index': random_index,
             'is_playing': auto_play,
             'last_progress_s': 0,
@@ -779,7 +910,10 @@ def handle_shuffle_next(data):
     emit_data = {
         'filename': audio_item['filename'],
         'filename_display': audio_item['filename_display'],
-        'cover': audio_item['cover']
+        'cover': audio_item['cover'],
+        'title': audio_item.get('title'),
+        'artist': audio_item.get('artist'),
+        'album': audio_item.get('album')
     }
     socketio.emit('new_file', emit_data, to=room)
     
