@@ -17,6 +17,8 @@ from flask_socketio import SocketIO, emit, join_room, leave_room, rooms
 from mutagen import File as MutagenFile
 from mutagen.id3 import APIC
 from mutagen.mp4 import MP4Cover
+import requests
+import syncedlyrics
 
 # --- App and Global Variable Setup ---
 thread_lock = Lock()
@@ -174,6 +176,33 @@ def extract_cover_art(file_path):
         print(f"Could not extract cover art from {os.path.basename(file_path)}: {e}")
     return None, None
 
+def get_lyrics(artist, title):
+    """
+    Fetches timestamped lyrics for a song using syncedlyrics.
+    Returns timestamped lyrics in LRC format or None if not found.
+    """
+    if not artist or not title:
+        return None
+    
+    # Clean up artist and title for better matching
+    artist = artist.strip()
+    title = title.strip()
+    
+    try:
+        # Use syncedlyrics to get timestamped lyrics
+        lrc_lyrics = syncedlyrics.search(f"{artist} {title}")
+        
+        if lrc_lyrics and lrc_lyrics.strip():
+            print(f"Found timestamped lyrics for {artist} - {title}")
+            return lrc_lyrics.strip()
+        else:
+            print(f"No timestamped lyrics found for {artist} - {title}")
+            return None
+            
+    except Exception as e:
+        print(f"Error fetching lyrics with syncedlyrics for {artist} - {title}: {e}")
+        return None
+
 
 # =================================================================================
 # Flask Routes
@@ -195,6 +224,81 @@ def get_metadata(filename):
         
     except Exception as e:
         print(f"Error getting metadata for {filename}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/lyrics')
+def get_song_lyrics():
+    """Get lyrics for a song based on artist and title parameters."""
+    artist = request.args.get('artist')
+    title = request.args.get('title')
+    
+    if not artist or not title:
+        return jsonify({'error': 'Both artist and title parameters are required'}), 400
+    
+    try:
+        lyrics = get_lyrics(artist, title)
+        if lyrics:
+            return jsonify({
+                'success': True,
+                'lyrics': lyrics,
+                'artist': artist,
+                'title': title
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Lyrics not found',
+                'artist': artist,
+                'title': title
+            }), 404
+    except Exception as e:
+        print(f"Error fetching lyrics for {artist} - {title}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/lyrics/<path:filename>')
+def get_lyrics_for_file(filename):
+    """Get lyrics for a song based on its filename (extracts metadata first)."""
+    try:
+        import urllib.parse
+        decoded_filename = urllib.parse.unquote(filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], decoded_filename)
+        
+        if not os.path.exists(file_path):
+            return jsonify({'error': 'File not found'}), 404
+        
+        # Extract metadata first
+        metadata = extract_metadata(file_path)
+        artist = metadata.get('artist')
+        title = metadata.get('title')
+        
+        if not artist or not title:
+            return jsonify({
+                'success': False,
+                'message': 'Could not extract artist or title from file metadata',
+                'filename': decoded_filename
+            }), 400
+        
+        # Fetch lyrics
+        lyrics = get_lyrics(artist, title)
+        if lyrics:
+            return jsonify({
+                'success': True,
+                'lyrics': lyrics,
+                'artist': artist,
+                'title': title,
+                'filename': decoded_filename
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Lyrics not found',
+                'artist': artist,
+                'title': title,
+                'filename': decoded_filename
+            }), 404
+            
+    except Exception as e:
+        print(f"Error getting lyrics for file {filename}: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/uploads/<path:filename>')
