@@ -16,6 +16,13 @@
     <!-- Fullscreen Color Transition Slide Overlay -->
     <div class="fullscreen-color-slide-overlay" id="fullscreen-color-slide-overlay"></div>
     
+    <!-- Fullscreen Lyrics Overlay -->
+    <div class="fullscreen-lyrics-overlay" id="fullscreen-lyrics-overlay" style="display: none;">
+        <div class="fullscreen-lyrics-content" id="fullscreen-lyrics-content">
+            <p class="no-lyrics">No lyrics available</p>
+        </div>
+    </div>
+    
     <style>
       body {
         font-family: 'Noto Sans', 'Noto Sans JP', 'Noto Sans KR', sans-serif;
@@ -160,6 +167,10 @@
                     <i class="fas fa-repeat" id="loop-icon"></i>
                 </button>
                 
+                <button class="control-button player-btn" id="lyrics-toggle-btn" title="Toggle Lyrics">
+                    <i class="fas fa-music"></i>
+                </button>
+                
                 <div class="volume-control">
                     <button class="control-button volume-btn" id="volume-btn"> 
                         <i class="fas fa-volume-up" id="volume-icon"></i>
@@ -190,6 +201,9 @@
             <button id="queue-btn" class="control-button">
                 <i class="fas fa-list"></i>Queue (<span id="queue-count">0</span>)
             </button>
+            <button id="lyrics-btn" class="control-button">
+                <i class="fas fa-music"></i>Lyrics
+            </button>
         </div>
 
         <!-- Fullscreen Toggle Button (hidden by default, shown when audio is loaded) -->
@@ -207,6 +221,24 @@
                 <div class="queue-modal-body">
                     <div id="queue-list" class="queue-list">
                         <p class="empty-queue">No songs in queue</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Lyrics Modal -->
+        <div id="lyrics-modal" class="lyrics-modal" style="display: none;">
+            <div class="lyrics-modal-content">
+                <div class="lyrics-modal-header">
+                    <h3>Lyrics</h3>
+                    <button id="close-lyrics" class="close-lyrics-btn">&times;</button>
+                </div>
+                <div class="lyrics-modal-body">
+                    <div id="lyrics-content" class="lyrics-content">
+                        <p class="no-lyrics">No lyrics available</p>
+                    </div>
+                    <div id="lyrics-loading" class="lyrics-loading" style="display: none;">
+                        <i class="fas fa-spinner fa-spin"></i> Fetching lyrics...
                     </div>
                 </div>
             </div>
