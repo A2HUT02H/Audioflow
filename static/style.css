@@ -159,8 +159,8 @@
     border: none;
     border-radius: 6px;
     background: rgba(0, 0, 0, 0.4);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(50px);
+    -webkit-backdrop-filter: blur(50px);
     color: rgba(255, 255, 255, 0.9);
     cursor: pointer;
     z-index: 100;
@@ -332,6 +332,7 @@ body.fullscreen-mode .custom-player {
     /* Ensure it's always visible on mobile */
     min-height: 60px;
     transition: opacity 0.4s, visibility 0.4s, transform 0.4s;
+    pointer-events: auto;
 }
 
 body.fullscreen-mode .custom-player.fullscreen-hide {
@@ -388,6 +389,33 @@ body.fullscreen-mode .progress-bar-container.progress-bar-only .progress-fill {
 body.fullscreen-mode .play-btn-large {
     width: 60px !important;
     height: 60px !important;
+}
+
+/* Show lyrics toggle button only in fullscreen mode */
+body.fullscreen-mode #lyrics-toggle-btn {
+    display: inline-flex !important;
+    width: 32px !important;
+    height: 32px !important;
+    font-size: 16px !important;
+    padding: 4px !important;
+}
+
+/* Hide cover section, room header section, and heading when lyrics are toggled in fullscreen */
+body.fullscreen-mode.lyrics-active .cover-section,
+body.fullscreen-mode.lyrics-active .room-header-controls,
+body.fullscreen-mode.lyrics-active .main-header,
+body.fullscreen-mode.lyrics-active .main-header .main-heading {
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+    transition: all 0.4s ease;
+}
+
+body.fullscreen-mode.lyrics-active #file-name {
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+    transition: all 0.4s ease;
 }
 
 body.fullscreen-mode .upload-wrapper,
@@ -728,6 +756,15 @@ body.fullscreen-mode .cover-dancing-bars.right {
     }
 }
 
+/* Add this new rule to hide the header when lyrics are active */
+body.fullscreen-mode.lyrics-active .main-header {
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-100%);
+    pointer-events: none;
+    transition: all 0.4s ease;
+}
+
 /* Queue Modal Styles */
 .queue-modal {
     position: fixed;
@@ -975,6 +1012,314 @@ body.fullscreen-mode .cover-dancing-bars.right {
         font-size: 0.7rem;
     }
 }
+
+/* Lyrics Modal Styles */
+.lyrics-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    z-index: 1000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.lyrics-modal-content {
+    background: linear-gradient(135deg, 
+        rgba(255, 255, 255, 0.1) 0%,
+        rgba(255, 255, 255, 0.05) 50%,
+        rgba(255, 255, 255, 0.02) 100%);
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    box-shadow: 
+        0 12px 40px 0 rgba(31, 38, 135, 0.5),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.1),
+        inset 0 -1px 0 0 rgba(255, 255, 255, 0.05);
+    width: 90%;
+    max-width: 600px;
+    max-height: 80vh;
+    overflow: hidden;
+    color: var(--text-color);
+    font-size: 0.95rem;
+}
+
+.lyrics-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.lyrics-modal-header h3 {
+    margin: 0;
+    font-size: clamp(1rem, 1.8vw, 1.2rem);
+    font-weight: 600;
+}
+
+.close-lyrics-btn {
+    background: none;
+    border: none;
+    color: var(--text-color);
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0.5rem;
+    border-radius: 8px;
+    transition: background 0.3s ease;
+}
+
+.close-lyrics-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.lyrics-modal-body {
+    padding: 1.5rem;
+    max-height: 65vh;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #8884 #2228;
+}
+
+.lyrics-modal-body::-webkit-scrollbar {
+    width: 7px;
+    background: transparent;
+}
+
+.lyrics-modal-body::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #8884, #4448);
+    border-radius: 6px;
+    min-height: 24px;
+}
+
+.lyrics-modal-body::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #aaa7, #555b);
+}
+
+.lyrics-modal-body::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.lyrics-content {
+    line-height: 1.8;
+    white-space: pre-line;
+    font-size: 1rem;
+    text-align: center;
+}
+
+.no-lyrics {
+    text-align: center;
+    color: var(--text-muted-color);
+    font-style: italic;
+    padding: 2rem;
+    font-size: 1.1rem;
+}
+
+.lyrics-loading {
+    text-align: center;
+    color: var(--text-muted-color);
+    padding: 2rem;
+    font-size: 1.1rem;
+}
+
+.lyrics-loading i {
+    margin-right: 0.5rem;
+}
+
+/* Timestamped lyrics styles */
+.lyrics-line {
+    display: block;
+    padding: 0.3rem 0;
+    transition: all 0.3s ease;
+    opacity: 0.6;
+    font-size: 1rem;
+    line-height: 1.6;
+}
+
+.lyrics-line.active {
+    opacity: 1;
+    color: var(--primary-color);
+    font-weight: 600;
+    transform: scale(1.05);
+    text-shadow: 0 0 10px rgba(var(--primary-color-rgb), 0.3);
+}
+
+.lyrics-line.past {
+    opacity: 0.4;
+    color: var(--text-muted-color);
+}
+
+.lyrics-line.future {
+    opacity: 0.6;
+    color: var(--text-color);
+}
+
+/* Mobile responsive adjustments for lyrics modal */
+@media (max-width: 600px) {
+    .lyrics-modal-content {
+        width: 95%;
+        margin: 1rem;
+        max-height: 85vh;
+    }
+    
+    .lyrics-modal-header {
+        padding: 1rem;
+    }
+    
+    .lyrics-modal-header h3 {
+        font-size: 1.2rem;
+    }
+    
+    .lyrics-modal-body {
+        padding: 1rem;
+        max-height: 70vh;
+    }
+    
+    .lyrics-content {
+        font-size: 0.9rem;
+        line-height: 1.7;
+    }
+}
+
+/* Fullscreen Lyrics Overlay */
+.fullscreen-lyrics-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: none;
+    z-index: 10000;
+    display: flex;
+    align-items: flex-start; /* Change this line */
+    justify-content: center;
+    padding-top: 10vh;
+    padding-bottom: 15vh;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+    pointer-events: none;
+}
+
+.fullscreen-lyrics-overlay.visible {
+    opacity: 1;
+    visibility: visible;
+}
+
+.fullscreen-lyrics-content {
+    max-width: 100%;
+    max-height: 60vh; /* Increased height to show more lyrics */
+    overflow-y: auto;
+    overflow-x: hidden;
+    text-align: center;
+    padding: 1.5rem;
+    position: relative;
+    /* The auto margins are no longer needed for top alignment */
+    pointer-events: auto;
+    /* Hide scrollbar */
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* Internet Explorer 10+ */
+    
+    /* Fade top and bottom of the lyrics area in fullscreen */
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 12%, black 88%, transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0%, black 12%, black 88%, transparent 100%);
+}
+
+.fullscreen-lyrics-content::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: none;
+    backdrop-filter: none;
+    border-radius: 12px;
+    z-index: -1;
+    -webkit-mask-image: linear-gradient(to bottom, black 90%, transparent 100%);
+    mask-image: linear-gradient(to bottom, black 90%, transparent 100%);
+}
+
+.fullscreen-lyrics-content::-webkit-scrollbar {
+    display: none; /* WebKit */
+}
+
+.fullscreen-lyrics-content .lyrics-line {
+    display: block;
+    white-space: normal; /* Allow long lines to wrap */
+    word-break: break-word; /* Break long words if needed */
+    padding: 0.8rem 0;
+    transition: all 0.4s ease;
+    opacity: 0.4;
+    font-size: clamp(1rem, 2.5vw, 1.8rem);
+    line-height: 1.4;
+    font-weight: 700;
+    color: white;
+    text-shadow: none;
+}
+
+.fullscreen-lyrics-content .lyrics-line.active {
+    opacity: 1;
+    font-weight: 600;
+    color: var(--current-bar-color, var(--primary-color));
+    text-shadow: none;
+    padding-left: 1vw;
+    padding-right: 1vw;
+    margin-left: 0.5vw;
+    margin-right: 0.5vw;
+    font-weight: 800;
+}
+
+.fullscreen-lyrics-content .lyrics-line.past {
+    opacity: 0.2;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.fullscreen-lyrics-content .lyrics-line.future {
+    opacity: 0.4;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.fullscreen-lyrics-content .no-lyrics {
+    font-size: clamp(1rem, 2vw, 1.5rem);
+    color: rgba(255, 255, 255, 0.7);
+    font-style: italic;
+    padding: 2rem;
+}
+
+.fullscreen-lyrics-content .lyrics-text {
+    white-space: pre-line;
+    font-size: clamp(1rem, 2.5vw, 1.8rem);
+    line-height: 1.6;
+    color: white;
+    text-shadow: none;
+}
+
+/* Responsive adjustments for fullscreen lyrics */
+@media (max-width: 768px) {
+    .fullscreen-lyrics-overlay {
+        padding-top: 15vh;
+        padding-bottom: 20vh;
+    }
+    
+    .fullscreen-lyrics-content {
+        padding: 1rem;
+        max-width: 90%;
+        max-height: 50vh;
+    }
+    
+    .fullscreen-lyrics-content .lyrics-line {
+        font-size: clamp(0.9rem, 4vw, 1.5rem);
+        padding: 0.6rem 0;
+    }
+}
+
 /* Animated sliding for long audio file names - back and forth movement */
 @keyframes slide-horizontal {
   0% { 
@@ -1375,6 +1720,7 @@ audio#player {
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
+    pointer-events: auto;
 }
 
 .upload-wrapper, .sync-wrapper {
@@ -1544,7 +1890,8 @@ audio#player {
 .main-player-row #play-pause-btn { order: 2; }
 .main-player-row #next-btn { order: 3; }
 .main-player-row #loop-btn { order: 4; }
-.main-player-row .volume-control { order: 5; }
+.main-player-row #lyrics-toggle-btn { order: 5; display: none; } /* Hidden by default, only shown in fullscreen */
+.main-player-row .volume-control { order: 6; }
 
 .progress-bar-container {
     width: 100%; /* Full width when it's its own row */
