@@ -11,6 +11,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const queueModal = document.getElementById('queue-modal');
     const closeQueueBtn = document.getElementById('close-queue');
     const queueList = document.getElementById('queue-list');
+    const lyricsBtn = document.getElementById('lyrics-btn');
+    const lyricsToggleBtn = document.getElementById('lyrics-toggle-btn');
+    console.log('Looking for lyrics-toggle-btn:', lyricsToggleBtn);
+    const lyricsModal = document.getElementById('lyrics-modal');
+    const closeLyricsBtn = document.getElementById('close-lyrics');
+    const lyricsContent = document.getElementById('lyrics-content');
+    const lyricsLoading = document.getElementById('lyrics-loading');
+    let fullscreenLyricsOverlay = document.getElementById('fullscreen-lyrics-overlay');
+    let fullscreenLyricsContent = document.getElementById('fullscreen-lyrics-content');
     const fileNameDisplay = document.getElementById('file-name');
     const songTitleElement = document.getElementById('song-title');
     const songArtistElement = document.getElementById('song-artist');
@@ -19,6 +28,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const controlButtons = document.querySelectorAll('.control-button');
     const coverDancingBarsLeft = document.querySelector('.cover-dancing-bars.left');
     const coverDancingBarsRight = document.querySelector('.cover-dancing-bars.right');
+
+    // Lyrics variables
+    let parsedLyrics = [];
+    let currentLyricsIndex = -1;
+    let lyricsUpdateInterval = null;
+    let lyricsCache = new Map(); // Cache lyrics by song key (filename + title + artist)
+    let currentSongKey = null; // Current song identifier for lyrics
+    let isFullscreenLyricsVisible = false; // Track fullscreen lyrics state
 
     // Keep dancing bars inside container across devices by tying CSS vars to real cover size
     function updateCoverPositionVars() {
@@ -96,6 +113,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentQueue = [];
     let currentQueueIndex = -1;
     let lastQueueIndex = -1; // Track previous index for direction inference
+
+    // --- Initialize lyrics cache from localStorage ---
+    loadLyricsCacheFromStorage();
 
     const MAX_ALLOWED_DRIFT_S = 0.5;
     const PLAYBACK_RATE_ADJUST = 0.05;
@@ -1072,6 +1092,57 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Lyrics button event listener (opens modal)
+    if (lyricsBtn) {
+        lyricsBtn.addEventListener('click', () => {
+            if (lyricsModal) {
+                lyricsModal.style.display = 'flex';
+                fetchAndDisplayLyrics();
+            }
+        });
+    }
+
+    // Lyrics toggle button event listener (toggles fullscreen lyrics)
+    if (lyricsToggleBtn) {
+        console.log('Lyrics toggle button found, adding click handler');
+        let lastClickTime = 0;
+        lyricsToggleBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const now = Date.now();
+            if (now - lastClickTime < 500) {
+                console.log('Click ignored due to debounce');
+                return;
+            }
+            lastClickTime = now;
+            console.log('Lyrics toggle button clicked');
+            toggleFullscreenLyrics();
+        });
+    } else {
+        console.log('Lyrics toggle button NOT found');
+    }
+
+    // Close lyrics modal
+    if (closeLyricsBtn) {
+        closeLyricsBtn.addEventListener('click', () => {
+            if (lyricsModal) {
+                lyricsModal.style.display = 'none';
+                // Stop lyrics sync when modal is closed
+                stopLyricsSync();
+            }
+        });
+    }
+
+    // Close lyrics modal on backdrop click
+    if (lyricsModal) {
+        lyricsModal.addEventListener('click', (e) => {
+            if (e.target === lyricsModal) {
+                lyricsModal.style.display = 'none';
+                // Stop lyrics sync when modal is closed
+                stopLyricsSync();
+            }
+        });
+    }
+
     // Next/Previous song buttons
     if (nextBtn) {
         nextBtn.addEventListener('click', () => {
@@ -1109,6 +1180,10 @@ document.addEventListener('DOMContentLoaded', () => {
         updateFileNameAnimation(); // Recalculate for playing state
         // Debug log to confirm visualizer start
         console.log('Play event: visualizer should start, bars should animate.');
+        // Start lyrics synchronization
+        if (parsedLyrics.length > 0) {
+            startLyricsSync();
+        }
         socket.emit('play', { room: roomId, time: player.currentTime });
     });
 
@@ -1119,6 +1194,8 @@ document.addEventListener('DOMContentLoaded', () => {
         hideCoverDancingBars();
         updateFileNameAnimation(); // Recalculate for paused state
         updateThemeForPlayingState();
+        // Stop lyrics synchronization
+        stopLyricsSync();
         // Ensure fullscreen contrast is maintained after pause
         if (document.body.classList.contains('fullscreen-mode')) {
             setTimeout(() => {
@@ -1182,6 +1259,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // Use the dedicated function to correctly start the animation loop
         if (!player.paused) {
             startVisualizer();
+        }
+
+        // Update lyrics highlight after seeking
+        if (parsedLyrics.length > 0) {
+            updateLyricsHighlight();
         }
 
         socket.emit('seek', { room: roomId, time: player.currentTime });
@@ -1634,6 +1716,19 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('[DEBUG] loadAudio called with displayFilename:', JSON.stringify(displayFilename));
         console.log('[DEBUG] loadAudio called with title:', JSON.stringify(title));
         console.log('[DEBUG] loadAudio called with artist:', JSON.stringify(artist));
+        
+        // Reset lyrics state when loading new audio
+        stopLyricsSync();
+        parsedLyrics = [];
+        currentLyricsIndex = -1;
+        
+        // Hide fullscreen lyrics when loading new song
+        if (isFullscreenLyricsVisible) {
+            hideFullscreenLyrics();
+        }
+        
+        // Set current song key for lyrics caching
+        currentSongKey = generateSongKey(filename, title, artist);
         
         if (!filename) {
             songTitleElement.textContent = "No file selected";
@@ -2598,6 +2693,427 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Lyrics functionality
+    async function fetchAndDisplayLyrics() {
+        if (!lyricsContent || !lyricsLoading) return;
+
+        // Get current song info
+        const currentSong = getCurrentSongInfo();
+        if (!currentSong.artist || !currentSong.title) {
+            showLyricsError('No song metadata available. Make sure the audio file has artist and title information.');
+            return;
+        }
+
+        // Check if we have cached lyrics for current song
+        if (currentSongKey) {
+            const cachedLyrics = getCachedLyrics(currentSongKey);
+            if (cachedLyrics) {
+                console.log('Loading lyrics from cache for:', currentSongKey);
+                // Hide loading state
+                lyricsLoading.style.display = 'none';
+                lyricsContent.style.display = 'block';
+                displayTimestampedLyrics(cachedLyrics);
+                return;
+            }
+        }
+
+        // Show loading state for web fetch
+        lyricsLoading.style.display = 'block';
+        lyricsContent.style.display = 'none';
+
+        try {
+            // Try fetching lyrics by artist and title
+            const response = await fetch(`/lyrics?artist=${encodeURIComponent(currentSong.artist)}&title=${encodeURIComponent(currentSong.title)}`);
+            const data = await response.json();
+
+            // Hide loading state
+            lyricsLoading.style.display = 'none';
+            lyricsContent.style.display = 'block';
+
+            if (data.success && data.lyrics) {
+                // Cache the lyrics for future use
+                if (currentSongKey) {
+                    cacheLyrics(currentSongKey, data.lyrics);
+                    console.log('Cached lyrics for:', currentSongKey);
+                }
+                displayTimestampedLyrics(data.lyrics);
+            } else {
+                showLyricsError(`Lyrics not found for "${currentSong.title}" by ${currentSong.artist}`);
+            }
+        } catch (error) {
+            console.error('Error fetching lyrics:', error);
+            lyricsLoading.style.display = 'none';
+            lyricsContent.style.display = 'block';
+            showLyricsError('Failed to fetch lyrics. Please try again.');
+        }
+    }
+
+    function showLyricsError(message) {
+        if (lyricsContent) {
+            lyricsContent.innerHTML = `<p class="no-lyrics">${message}</p>`;
+        }
+    }
+
+    function getCurrentSongInfo() {
+        // Get current song info from the displayed elements
+        const title = songTitleElement ? songTitleElement.textContent.trim() : '';
+        const artist = songArtistElement ? songArtistElement.textContent.trim() : '';
+        
+        return {
+            title: title !== 'No file selected' && title !== '' ? title : null,
+            artist: artist !== '' ? artist : null
+        };
+    }
+
+    // Generate unique key for song identification
+    function generateSongKey(filename, title, artist) {
+        return `${filename}|${title || ''}|${artist || ''}`;
+    }
+
+    // Get cached lyrics for a song
+    function getCachedLyrics(songKey) {
+        return lyricsCache.get(songKey);
+    }
+
+    // Cache lyrics for a song
+    function cacheLyrics(songKey, lyrics) {
+        lyricsCache.set(songKey, lyrics);
+        // Also save to localStorage for persistence across sessions
+        try {
+            localStorage.setItem(`lyrics_${songKey}`, lyrics);
+        } catch (e) {
+            console.warn('Could not save lyrics to localStorage:', e);
+        }
+    }
+
+    // Load lyrics cache from localStorage
+    function loadLyricsCacheFromStorage() {
+        try {
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('lyrics_')) {
+                    const songKey = key.replace('lyrics_', '');
+                    const lyrics = localStorage.getItem(key);
+                    if (lyrics) {
+                        lyricsCache.set(songKey, lyrics);
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('Could not load lyrics cache from localStorage:', e);
+        }
+    }
+
+    // Parse timestamped lyrics from format [mm:ss.xx] lyrics text
+    function parseLyrics(lyricsText) {
+        const lines = lyricsText.split('\n');
+        const parsed = [];
+        const timestampRegex = /^\[(\d{2}):(\d{2})\.(\d{2})\]\s*(.*)$/;
+        
+        for (const line of lines) {
+            const match = line.match(timestampRegex);
+            if (match) {
+                const minutes = parseInt(match[1], 10);
+                const seconds = parseInt(match[2], 10);
+                const centiseconds = parseInt(match[3], 10);
+                const text = match[4].trim();
+                
+                // Convert to total seconds
+                const timeInSeconds = minutes * 60 + seconds + centiseconds / 100;
+                
+                if (text) { // Only add lines that have text
+                    parsed.push({
+                        time: timeInSeconds,
+                        text: text
+                    });
+                }
+            }
+        }
+        
+        // Sort by time to ensure correct order
+        return parsed.sort((a, b) => a.time - b.time);
+    }
+
+    // Display parsed lyrics with timestamps
+    function displayTimestampedLyrics(lyrics) {
+        parsedLyrics = parseLyrics(lyrics);
+        
+        if (parsedLyrics.length === 0) {
+            // If no timestamps found, display as regular lyrics
+            lyricsContent.innerHTML = `<div class="lyrics-text">${lyrics}</div>`;
+            return;
+        }
+
+        // Create HTML for timestamped lyrics
+        const lyricsHTML = parsedLyrics.map((line, index) => 
+            `<div class="lyrics-line" data-index="${index}" data-time="${line.time}">${line.text}</div>`
+        ).join('');
+        
+        lyricsContent.innerHTML = `<div class="lyrics-text">${lyricsHTML}</div>`;
+        
+        // Start lyrics synchronization if audio is playing
+        if (player && !player.paused) {
+            startLyricsSync();
+        }
+    }
+
+    // Synchronize lyrics with current playback time
+    function updateLyricsHighlight() {
+        if (!player || parsedLyrics.length === 0) return;
+        
+        const currentTime = player.currentTime;
+        let activeIndex = -1;
+        
+        // Find the current active lyric line
+        for (let i = 0; i < parsedLyrics.length; i++) {
+            if (currentTime >= parsedLyrics[i].time) {
+                activeIndex = i;
+            } else {
+                break;
+            }
+        }
+        
+        // Update highlighting if the active line changed
+        if (activeIndex !== currentLyricsIndex) {
+            currentLyricsIndex = activeIndex;
+            
+            // Update modal lyrics
+            const lyricsLines = document.querySelectorAll('.lyrics-content .lyrics-line');
+            lyricsLines.forEach((line, index) => {
+                line.classList.remove('active', 'past', 'future');
+                
+                if (index === activeIndex) {
+                    line.classList.add('active');
+                    // Scroll to active line
+                    line.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                } else if (index < activeIndex) {
+                    line.classList.add('past');
+                } else {
+                    line.classList.add('future');
+                }
+            });
+            
+            // Update fullscreen lyrics if visible
+            if (isFullscreenLyricsVisible) {
+                updateFullscreenLyricsHighlight();
+            }
+        }
+    }
+
+    // Start lyrics synchronization
+    function startLyricsSync() {
+        if (lyricsUpdateInterval) {
+            clearInterval(lyricsUpdateInterval);
+        }
+        
+        lyricsUpdateInterval = setInterval(updateLyricsHighlight, 100); // Update every 100ms
+    }
+
+    // Stop lyrics synchronization
+    function stopLyricsSync() {
+        if (lyricsUpdateInterval) {
+            clearInterval(lyricsUpdateInterval);
+            lyricsUpdateInterval = null;
+        }
+        currentLyricsIndex = -1;
+    }
+
+    // Clear lyrics cache (useful for debugging or clearing space)
+    function clearLyricsCache() {
+        lyricsCache.clear();
+        try {
+            // Remove all lyrics items from localStorage
+            const keysToRemove = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('lyrics_')) {
+                    keysToRemove.push(key);
+                }
+            }
+            keysToRemove.forEach(key => localStorage.removeItem(key));
+            console.log('Lyrics cache cleared');
+        } catch (e) {
+            console.warn('Could not clear lyrics cache from localStorage:', e);
+        }
+    }
+
+    // Get cache statistics
+    function getLyricsCacheStats() {
+        return {
+            cachedSongs: lyricsCache.size,
+            cacheKeys: Array.from(lyricsCache.keys())
+        };
+    }
+
+    // Show fullscreen lyrics overlay
+    function showFullscreenLyrics() {
+    if (!fullscreenLyricsOverlay) return;
+
+    console.log('Showing fullscreen lyrics overlay');
+    isFullscreenLyricsVisible = true;
+    document.body.classList.add('lyrics-active'); // Add this line
+
+    // Ensure the overlay is part of the layout before adding the visible class for transitions
+    fullscreenLyricsOverlay.style.display = 'flex';
+
+    // Add the 'visible' class to trigger the fade-in animation from the stylesheet
+    setTimeout(() => {
+        fullscreenLyricsOverlay.classList.add('visible');
+    }, 10); // A small delay ensures the transition triggers correctly
+
+    // Fetch and display the actual lyrics
+    fetchLyricsForFullscreen();
+
+    // Keep player controls visible while lyrics are shown
+    if (document.body.classList.contains('fullscreen-mode')) {
+        showPlayerBox();
+        // Prevent the idle timer from hiding controls while lyrics are open
+        if (fullscreenIdleTimer) clearTimeout(fullscreenIdleTimer);
+    }
+}
+    // Hide fullscreen lyrics overlay
+    function hideFullscreenLyrics() {
+        if (!fullscreenLyricsOverlay) return;
+        
+        isFullscreenLyricsVisible = false;
+        document.body.classList.remove('lyrics-active'); // Add this line
+        fullscreenLyricsOverlay.classList.remove('visible');
+        
+        // Resume idle timer when lyrics are hidden
+        if (document.body.classList.contains('fullscreen-mode')) {
+            resetFullscreenIdleTimer();
+        }
+        
+        setTimeout(() => {
+            fullscreenLyricsOverlay.style.display = 'none';
+        }, 300); // Wait for transition to complete
+    }
+
+    // Toggle fullscreen lyrics
+    function toggleFullscreenLyrics() {
+        if (isFullscreenLyricsVisible) {
+            hideFullscreenLyrics();
+        } else {
+            showFullscreenLyrics();
+        }
+    }
+
+    // Display timestamped lyrics in fullscreen mode
+    function displayFullscreenTimestampedLyrics() {
+        if (!fullscreenLyricsContent || parsedLyrics.length === 0) {
+            if (fullscreenLyricsContent) {
+                fullscreenLyricsContent.innerHTML = '<p class="no-lyrics">No lyrics available</p>';
+            }
+            return;
+        }
+
+        // Create HTML for timestamped lyrics
+        const lyricsHTML = parsedLyrics.map((line, index) => 
+            `<div class="lyrics-line" data-index="${index}" data-time="${line.time}">${line.text}</div>`
+        ).join('');
+        
+        fullscreenLyricsContent.innerHTML = `<div class="lyrics-text">${lyricsHTML}</div>`;
+        
+        // Force immediate highlight update to sync with current playback position
+        if (player) {
+            // Calculate current lyrics index
+            const currentTime = player.currentTime;
+            let activeIndex = -1;
+            
+            for (let i = 0; i < parsedLyrics.length; i++) {
+                if (currentTime >= parsedLyrics[i].time) {
+                    activeIndex = i;
+                } else {
+                    break;
+                }
+            }
+            
+            currentLyricsIndex = activeIndex;
+            updateFullscreenLyricsHighlight();
+        }
+    }
+
+    // Update lyrics highlighting in fullscreen mode
+    function updateFullscreenLyricsHighlight() {
+        if (!player || parsedLyrics.length === 0 || !isFullscreenLyricsVisible) return;
+        
+        // Use the current lyrics index that was already calculated
+        const activeIndex = currentLyricsIndex;
+        
+        const lyricsLines = fullscreenLyricsContent.querySelectorAll('.lyrics-line');
+        console.log('Updating fullscreen lyrics highlight. Active index:', activeIndex, 'Lines found:', lyricsLines.length);
+        
+        lyricsLines.forEach((line, index) => {
+            line.classList.remove('active', 'past', 'future');
+            
+            if (index === activeIndex) {
+                line.classList.add('active');
+                // Scroll to active line
+                line.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } else if (index < activeIndex) {
+                line.classList.add('past');
+            } else {
+                line.classList.add('future');
+            }
+        });
+    }
+
+    // Fetch lyrics specifically for fullscreen display
+    async function fetchLyricsForFullscreen() {
+        if (!fullscreenLyricsContent) return;
+
+        // Get current song info
+        const currentSong = getCurrentSongInfo();
+        
+        if (!currentSong.artist || !currentSong.title) {
+            fullscreenLyricsContent.innerHTML = '<p class="no-lyrics">No song metadata available</p>';
+            return;
+        }
+
+        // Check if we have cached lyrics for current song
+        if (currentSongKey) {
+            const cachedLyrics = getCachedLyrics(currentSongKey);
+            if (cachedLyrics) {
+                console.log('Loading lyrics from cache for fullscreen:', currentSongKey);
+                parsedLyrics = parseLyrics(cachedLyrics);
+                displayFullscreenTimestampedLyrics();
+                // Start sync if audio is playing
+                if (player && !player.paused) {
+                    startLyricsSync();
+                }
+                return;
+            }
+        }
+
+        // Show loading state
+        fullscreenLyricsContent.innerHTML = '<p class="no-lyrics">Loading lyrics...</p>';
+
+        try {
+            // Try fetching lyrics by artist and title
+            const response = await fetch(`/lyrics?artist=${encodeURIComponent(currentSong.artist)}&title=${encodeURIComponent(currentSong.title)}`);
+            const data = await response.json();
+
+            if (data.success && data.lyrics) {
+                // Cache the lyrics for future use
+                if (currentSongKey) {
+                    cacheLyrics(currentSongKey, data.lyrics);
+                    console.log('Cached lyrics for fullscreen:', currentSongKey);
+                }
+                parsedLyrics = parseLyrics(data.lyrics);
+                displayFullscreenTimestampedLyrics();
+                // Start sync if audio is playing
+                if (player && !player.paused) {
+                    startLyricsSync();
+                }
+            } else {
+                fullscreenLyricsContent.innerHTML = `<p class="no-lyrics">Lyrics not found for "${currentSong.title}" by ${currentSong.artist}</p>`;
+            }
+        } catch (error) {
+            console.error('Error fetching lyrics for fullscreen:', error);
+            fullscreenLyricsContent.innerHTML = '<p class="no-lyrics">Failed to fetch lyrics</p>';
+        }
+    }
+
     function updateNextPrevButtons() {
         if (prevBtn) {
             prevBtn.disabled = currentQueue.length <= 1;
@@ -2897,6 +3413,11 @@ function toggleFullscreen() {
                 // Remove fullscreen mode class when exiting fullscreen
                 document.body.classList.remove('fullscreen-mode');
                 
+                // Hide fullscreen lyrics when exiting fullscreen
+                if (isFullscreenLyricsVisible) {
+                    hideFullscreenLyrics();
+                }
+                
                 // Reset background to default when exiting fullscreen
                 document.body.style.background = 'linear-gradient(135deg, var(--background-color-start), var(--background-color-end))';
 
@@ -2926,6 +3447,11 @@ document.addEventListener('fullscreenchange', () => {
     if (!document.fullscreenElement) {
         // Exited fullscreen, remove the mode class
         document.body.classList.remove('fullscreen-mode');
+        
+        // Hide fullscreen lyrics when exiting fullscreen mode
+        if (isFullscreenLyricsVisible) {
+            hideFullscreenLyrics();
+        }
         
         // Reset background to default when exiting fullscreen
         document.body.style.background = 'linear-gradient(135deg, var(--background-color-start), var(--background-color-end))';
@@ -3011,6 +3537,10 @@ function showPlayerBox() {
 
 function hidePlayerBox() {
     if (!document.body.classList.contains('fullscreen-mode')) return;
+    
+    // Don't hide player controls when lyrics are visible
+    if (isFullscreenLyricsVisible) return;
+    
     const customPlayer = document.querySelector('.custom-player');
     const progressBarContainer = document.querySelector('.progress-bar-container');
     // Entering idle state
@@ -3026,6 +3556,13 @@ function hidePlayerBox() {
 
 function resetFullscreenIdleTimer() {
     if (!document.body.classList.contains('fullscreen-mode')) return;
+    
+    // Don't start idle timer when lyrics are visible
+    if (isFullscreenLyricsVisible) {
+        showPlayerBox();
+        return;
+    }
+    
     showPlayerBox();
     if (fullscreenIdleTimer) clearTimeout(fullscreenIdleTimer);
     fullscreenIdleTimer = setTimeout(() => {
@@ -3035,11 +3572,6 @@ function resetFullscreenIdleTimer() {
 
 // Only activate in fullscreen mode
 document.addEventListener('mousemove', (e) => {
-    if (document.body.classList.contains('fullscreen-mode')) {
-        resetFullscreenIdleTimer();
-    }
-});
-document.addEventListener('keydown', (e) => {
     if (document.body.classList.contains('fullscreen-mode')) {
         resetFullscreenIdleTimer();
     }
@@ -3106,7 +3638,128 @@ document.addEventListener('fullscreenchange', () => {
             updateThemeForPlayingState();
         }
     });
+
+    // Event listeners for global lyrics cache management
+    document.addEventListener('clearLyricsCache', () => {
+        clearLyricsCache();
+    });
+
+    document.addEventListener('getLyricsCacheStats', () => {
+        const stats = getLyricsCacheStats();
+        console.log('Lyrics cache stats:', stats);
+    });
+
+    document.addEventListener('showFullscreenLyrics', () => {
+        showFullscreenLyrics();
+    });
+
+    document.addEventListener('hideFullscreenLyrics', () => {
+        hideFullscreenLyrics();
+    });
+
+    document.addEventListener('toggleFullscreenLyrics', () => {
+        toggleFullscreenLyrics();
+    });
+
+    // Fullscreen lyrics overlay - no click-to-close functionality
+    // Only ESC key and L key can close fullscreen lyrics
+    if (fullscreenLyricsOverlay) {
+        console.log('Fullscreen lyrics overlay initialized - click-to-close disabled');
+        // Remove any existing click handlers by cloning the element
+        const newOverlay = fullscreenLyricsOverlay.cloneNode(true);
+        fullscreenLyricsOverlay.parentNode.replaceChild(newOverlay, fullscreenLyricsOverlay);
+
+        // Re-assign the variables to the new, live elements in the DOM
+        fullscreenLyricsOverlay = newOverlay;
+        fullscreenLyricsContent = fullscreenLyricsOverlay.querySelector('.fullscreen-lyrics-content');
+    }
+
+    // Keyboard event handlers (inside DOMContentLoaded scope for function access)
+    document.addEventListener('keydown', (e) => {
+        if (document.body.classList.contains('fullscreen-mode')) {
+            resetFullscreenIdleTimer();
+            
+            // Toggle lyrics with 'L' key in fullscreen mode
+            if (e.key.toLowerCase() === 'l' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                e.preventDefault();
+                toggleFullscreenLyrics();
+            }
+            
+            // Close lyrics with ESC key in fullscreen mode
+            if (e.key === 'Escape' && isFullscreenLyricsVisible) {
+                e.preventDefault();
+                hideFullscreenLyrics();
+            }
+        } else {
+            // Global ESC key handler for closing lyrics modal
+            if (e.key === 'Escape' && lyricsModal && lyricsModal.style.display === 'flex') {
+                e.preventDefault();
+                lyricsModal.style.display = 'none';
+                stopLyricsSync();
+            }
+        }
+        
+        // Global ESC key handler for closing fullscreen lyrics (works in all modes)
+        if (e.key === 'Escape' && isFullscreenLyricsVisible) {
+            e.preventDefault();
+            hideFullscreenLyrics();
+        }
+    });
 });
+
+// Global lyrics cache management functions (accessible from console)
+window.lyricsCache = {
+    clear: function() {
+        // Access the functions from within the DOMContentLoaded scope
+        const clearEvent = new CustomEvent('clearLyricsCache');
+        document.dispatchEvent(clearEvent);
+        console.log('Lyrics cache cleared');
+    },
+    stats: function() {
+        const statsEvent = new CustomEvent('getLyricsCacheStats');
+        document.dispatchEvent(statsEvent);
+    },
+    list: function() {
+        try {
+            const keys = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('lyrics_')) {
+                    keys.push(key.replace('lyrics_', ''));
+                }
+            }
+            console.log('Cached lyrics for songs:', keys);
+            return keys;
+        } catch (e) {
+            console.warn('Could not list cached lyrics:', e);
+            return [];
+        }
+    }
+};
+
+// Global fullscreen lyrics functions (accessible from console)
+window.fullscreenLyrics = {
+    show: function() {
+        if (document.body.classList.contains('fullscreen-mode')) {
+            const showEvent = new CustomEvent('showFullscreenLyrics');
+            document.dispatchEvent(showEvent);
+        } else {
+            console.log('Fullscreen lyrics only available in fullscreen mode');
+        }
+    },
+    hide: function() {
+        const hideEvent = new CustomEvent('hideFullscreenLyrics');
+        document.dispatchEvent(hideEvent);
+    },
+    toggle: function() {
+        if (document.body.classList.contains('fullscreen-mode')) {
+            const toggleEvent = new CustomEvent('toggleFullscreenLyrics');
+            document.dispatchEvent(toggleEvent);
+        } else {
+            console.log('Fullscreen lyrics only available in fullscreen mode. Press L key in fullscreen to toggle lyrics.');
+        }
+    }
+};
 
 // Ensures text and background colors are not too similar in fullscreen
 function ensureFullscreenContrast() {
@@ -3126,7 +3779,7 @@ function ensureFullscreenContrast() {
     console.log(`Background brightness: ${bgBrightness}, using contrast color: ${contrastColor}`);
     
     // Force apply contrast color to ALL text elements regardless of similarity check
-    [mainHeading, fileNameText, roomCodeDisplay, audioflowHeading, memberCount].forEach(el => {
+    [mainHeading, songTitleText, songArtistText, roomCodeDisplay, audioflowHeading, memberCount].forEach(el => {
         if (!el) return;
         console.log(`Force setting ${el.className || el.id || el.tagName} to ${contrastColor}`);
         el.style.setProperty('color', contrastColor, 'important');
