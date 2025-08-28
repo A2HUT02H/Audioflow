@@ -2639,6 +2639,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // Render queue items with draggable attributes for reordering
         const queueHTML = currentQueue.map((item, index) => {
             const isCurrentSong = Number(index) === Number(currentQueueIndex);
             const coverSrc = item.cover ? `/uploads/${item.cover}` : '';
@@ -2646,18 +2647,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? `<img src="${coverSrc}" alt="Cover" class="queue-item-cover">` 
                 : '<div class="queue-item-cover">🎵</div>';
             
+            // Only make items draggable if there's more than one song in the queue
+            const isDraggable = currentQueue.length > 1;
+            
             return `
-                <div class="queue-item ${isCurrentSong ? 'current' : ''}" data-index="${index}">
+                <div class="queue-item ${isCurrentSong ? 'current' : ''}" data-index="${index}" ${isDraggable ? 'draggable="true"' : ''}>
                     ${coverDisplay}
                     <div class="queue-item-info">
                         <div class="queue-item-title">${item.filename_display || item.filename}</div>
                         <div class="queue-item-status">${isCurrentSong ? 'Now Playing' : `#${index + 1} in queue`}</div>
                     </div>
                     <div class="queue-item-actions">
-                        <button class="queue-item-btn play-btn" data-index="${index}" title="Play">
+                        <button class="queue-item-btn play-btn" data-index="${index}" title="Play" draggable="false">
                             <i class="fas fa-play"></i>
                         </button>
-                        <button class="queue-item-btn remove-btn danger" data-index="${index}" title="Remove">
+                        <button class="queue-item-btn remove-btn danger" data-index="${index}" title="Remove" draggable="false">
                             <i class="fas fa-trash"></i>
                         </button>
                     </div>
@@ -2667,30 +2671,288 @@ document.addEventListener('DOMContentLoaded', () => {
 
         queueList.innerHTML = queueHTML;
 
-        // Add event listeners to queue item buttons
-        queueList.querySelectorAll('.play-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const index = parseInt(btn.dataset.index);
-                playFromQueue(index);
-            });
-        });
+        // Setup drag and drop with event delegation for reliability
+        setupDragAndDrop();
+        
+        // Setup button event listeners with event delegation
+        setupQueueButtonListeners();
+    }
 
-        queueList.querySelectorAll('.remove-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const index = parseInt(btn.dataset.index);
-                removeFromQueue(index);
-            });
-        });
+    // Drag & drop state with animated placeholder preview
+    let dragSrcIndex = null;
+    let placeholderEl = null;
+    let draggedElement = null;
 
-        // Add click listeners to queue items themselves
+    function setupDragAndDrop() {
+        // Remove any existing listeners to prevent duplicates
+        queueList.removeEventListener('dragstart', handleDragStart);
+        queueList.removeEventListener('dragend', handleDragEnd);
+        queueList.removeEventListener('dragover', handleDragOver);
+        queueList.removeEventListener('drop', handleDrop);
+
+        // Use event delegation for reliability
+        queueList.addEventListener('dragstart', handleDragStart);
+        queueList.addEventListener('dragend', handleDragEnd);
+        queueList.addEventListener('dragover', handleDragOver);
+        queueList.addEventListener('drop', handleDrop);
+    }
+
+    function handleDragStart(e) {
+        const itemEl = e.target.closest('.queue-item');
+        if (!itemEl) return;
+
+        // Prevent drag if there's only one song in the queue
+        if (currentQueue.length <= 1) {
+            e.preventDefault();
+            e.stopPropagation();
+            return false;
+        }
+
+        // Prevent drag from starting if user clicked on a button or icon
+        if (e.target.closest('.queue-item-btn') || e.target.tagName.toLowerCase() === 'button') {
+            e.preventDefault();
+            e.stopPropagation();
+            return false;
+        }
+
+        const idx = parseInt(itemEl.dataset.index, 10);
+        if (isNaN(idx)) return;
+        
+        dragSrcIndex = idx;
+        draggedElement = itemEl;
+        
+        e.dataTransfer.effectAllowed = 'move';
+        try { 
+            e.dataTransfer.setData('text/plain', String(idx)); 
+        } catch (err) { 
+            console.warn('DataTransfer setData failed:', err);
+        }
+
+        // Create and insert placeholder
+        placeholderEl = createPlaceholder(itemEl.offsetHeight || 60);
+        itemEl.parentNode.insertBefore(placeholderEl, itemEl.nextSibling);
+
+        // Visual feedback
+        itemEl.classList.add('dragging');
+        itemEl.style.opacity = '0.3';
+        
+        // Prevent text selection
+        document.body.style.userSelect = 'none';
+    }
+
+    function handleDragEnd(e) {
+        const itemEl = e.target.closest('.queue-item');
+        if (!itemEl && !draggedElement) return;
+        
+        const targetEl = itemEl || draggedElement;
+        
+        // Cleanup
+        dragSrcIndex = null;
+        draggedElement = null;
+        
+        if (placeholderEl && placeholderEl.parentNode) {
+            placeholderEl.parentNode.removeChild(placeholderEl);
+        }
+        placeholderEl = null;
+        
+        if (targetEl) {
+            targetEl.classList.remove('dragging');
+            targetEl.style.opacity = '';
+        }
+        
+        // Clear any lingering styles
         queueList.querySelectorAll('.queue-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const index = parseInt(item.dataset.index);
-                playFromQueue(index);
-            });
+            item.classList.remove('drag-over');
+            item.style.transition = '';
+            item.style.transform = '';
         });
+        
+        document.body.style.userSelect = '';
+    }
+
+    function handleDragOver(e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+
+        const itemEl = e.target.closest('.queue-item');
+        if (!itemEl || !placeholderEl) return;
+
+        // Determine insertion point
+        const rect = itemEl.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        const insertBefore = e.clientY < midY;
+        
+        // Check if we need to move placeholder
+        const targetSibling = insertBefore ? itemEl : itemEl.nextSibling;
+        if (placeholderEl.nextSibling === targetSibling) return; // Already in position
+
+        // FLIP animation: capture first positions of items that will move
+        const items = Array.from(queueList.querySelectorAll('.queue-item'))
+            .filter(el => el !== placeholderEl && el !== draggedElement);
+        const firstRects = new Map();
+        items.forEach(el => firstRects.set(el, el.getBoundingClientRect()));
+
+        // Move placeholder to new position
+        try {
+            if (insertBefore) {
+                itemEl.parentNode.insertBefore(placeholderEl, itemEl);
+            } else {
+                itemEl.parentNode.insertBefore(placeholderEl, itemEl.nextSibling);
+            }
+        } catch (err) {
+            console.warn('Failed to move placeholder:', err);
+            return;
+        }
+
+        // Capture last positions and animate the difference
+        items.forEach(el => {
+            const first = firstRects.get(el);
+            const last = el.getBoundingClientRect();
+            if (!first || !last) return;
+            
+            const deltaY = first.top - last.top;
+            if (deltaY === 0) return;
+            
+            // Apply inverse transform and animate back to natural position
+            el.style.transition = 'none';
+            el.style.transform = `translateY(${deltaY}px)`;
+            
+            // Force reflow
+            el.getBoundingClientRect();
+            
+            // Animate to natural position
+            el.style.transition = 'transform 180ms ease-out';
+            el.style.transform = '';
+            
+            // Clean up after animation
+            const cleanup = () => {
+                el.style.transition = '';
+                el.removeEventListener('transitionend', cleanup);
+            };
+            el.addEventListener('transitionend', cleanup);
+            
+            // Fallback cleanup in case transitionend doesn't fire
+            setTimeout(() => {
+                el.style.transition = '';
+                el.removeEventListener('transitionend', cleanup);
+            }, 200);
+        });
+    }
+
+    function handleDrop(e) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (dragSrcIndex === null) {
+            try {
+                const fromIndexStr = e.dataTransfer.getData('text/plain');
+                dragSrcIndex = parseInt(fromIndexStr, 10);
+                if (isNaN(dragSrcIndex)) dragSrcIndex = null;
+            } catch (err) {
+                console.warn('Failed to get drag data:', err);
+            }
+        }
+        
+        if (dragSrcIndex === null || !placeholderEl) return;
+
+        // Compute destination index
+        const toIndex = computeToIndexFromPlaceholder();
+        if (toIndex === null) return;
+
+        // Calculate effective destination
+        let effectiveTo = toIndex;
+        if (toIndex > dragSrcIndex) effectiveTo = toIndex - 1;
+        
+        // Skip if no actual change
+        if (effectiveTo === dragSrcIndex) return;
+
+        // Optimistically reorder locally
+        const moved = currentQueue.splice(dragSrcIndex, 1)[0];
+        currentQueue.splice(effectiveTo, 0, moved);
+
+        // Update current index if necessary
+        if (currentQueueIndex === dragSrcIndex) {
+            currentQueueIndex = effectiveTo;
+        } else if (dragSrcIndex < currentQueueIndex && effectiveTo >= currentQueueIndex) {
+            currentQueueIndex -= 1;
+        } else if (effectiveTo <= currentQueueIndex && dragSrcIndex > currentQueueIndex) {
+            currentQueueIndex += 1;
+        }
+
+        updateQueueDisplay();
+        sendReorderRequest(dragSrcIndex, effectiveTo);
+    }
+
+    function createPlaceholder(height) {
+        const ph = document.createElement('div');
+        ph.className = 'queue-placeholder';
+        ph.style.height = `${height}px`;
+        ph.style.transition = 'height 160ms ease, opacity 160ms ease, margin 160ms ease';
+        return ph;
+    }
+
+    function computeToIndexFromPlaceholder() {
+        if (!placeholderEl) return null;
+        let idx = 0;
+        for (const child of Array.from(queueList.children)) {
+            if (child === placeholderEl) break;
+            if (child.classList && child.classList.contains('queue-item')) idx++;
+        }
+        return idx;
+    }
+
+    function setupQueueButtonListeners() {
+        console.log('Setting up queue button listeners');
+        // Remove existing listeners to prevent duplicates
+        queueList.removeEventListener('click', handleQueueClick);
+        queueList.removeEventListener('mousedown', handleButtonMouseDown);
+        
+        // Use event delegation for all queue interactions
+        queueList.addEventListener('click', handleQueueClick);
+        queueList.addEventListener('mousedown', handleButtonMouseDown);
+        console.log('Queue button listeners attached');
+    }
+
+    function handleButtonMouseDown(e) {
+        // Prevent drag from starting when clicking on buttons
+        if (e.target.closest('.queue-item-btn')) {
+            e.stopPropagation();
+            // Don't prevent default as we want the button click to work
+        }
+    }
+
+    function handleQueueClick(e) {
+        console.log('Queue click detected:', e.target, e.target.className);
+        e.stopPropagation();
+        
+        const playBtn = e.target.closest('.play-btn');
+        const removeBtn = e.target.closest('.remove-btn');
+        const queueItem = e.target.closest('.queue-item');
+        
+        console.log('Button detection:', { playBtn, removeBtn, queueItem });
+        
+        if (playBtn) {
+            e.preventDefault();
+            const index = parseInt(playBtn.dataset.index);
+            console.log('Play button clicked, index:', index);
+            if (!isNaN(index)) {
+                console.log('Playing from queue index:', index);
+                playFromQueue(index);
+            }
+        } else if (removeBtn) {
+            e.preventDefault();
+            const index = parseInt(removeBtn.dataset.index);
+            console.log('Remove button clicked, index:', index);
+            if (!isNaN(index)) {
+                console.log('Removing from queue index:', index);
+                removeFromQueue(index);
+            }
+        } else if (queueItem && !e.target.closest('.queue-item-actions')) {
+            // Only trigger play if not clicking on action buttons
+            const index = parseInt(queueItem.dataset.index);
+            console.log('Queue item clicked (not button), index:', index);
+            if (!isNaN(index)) playFromQueue(index);
+        }
     }
 
     // Lyrics functionality
@@ -2700,7 +2962,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Get current song info
         const currentSong = getCurrentSongInfo();
         if (!currentSong.artist || !currentSong.title) {
-            showLyricsError('No song metadata available. Make sure the audio file has artist and title information.');
+            showLyricsError('No song metadata available.');
             return;
         }
 
@@ -3162,6 +3424,28 @@ document.addEventListener('DOMContentLoaded', () => {
         })
         .catch(error => {
             console.error('Error removing from queue:', error);
+        });
+    }
+
+    // Send reorder request to server
+    function sendReorderRequest(fromIndex, toIndex) {
+        fetch(`/queue/${roomId}/reorder`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ from_index: fromIndex, to_index: toIndex })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (!data.success) {
+                console.error('Failed to reorder queue on server:', data.error);
+                // On failure, request full queue refresh (server will emit queue_update)
+                socket.emit('request_queue_refresh', { room: roomId });
+            }
+        })
+        .catch(err => {
+            console.error('Error sending reorder request:', err);
+            // Try to refresh queue state from server
+            socket.emit('request_queue_refresh', { room: roomId });
         });
     }
 
