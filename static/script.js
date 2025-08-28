@@ -18,6 +18,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const closeLyricsBtn = document.getElementById('close-lyrics');
     const lyricsContent = document.getElementById('lyrics-content');
     const lyricsLoading = document.getElementById('lyrics-loading');
+    const memberCount = document.querySelector('.member-count');
+    const membersModal = document.getElementById('members-modal');
+    const closeMembersBtn = document.getElementById('close-members');
+    // membersList is now accessed dynamically in functions to avoid scope issues
     let fullscreenLyricsOverlay = document.getElementById('fullscreen-lyrics-overlay');
     let fullscreenLyricsContent = document.getElementById('fullscreen-lyrics-content');
     const fileNameDisplay = document.getElementById('file-name');
@@ -1143,6 +1147,40 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Member count button event listener (opens modal)
+    if (memberCount) {
+        memberCount.addEventListener('click', () => {
+            console.log('Member count button clicked!');
+            if (membersModal) {
+                console.log('Opening members modal');
+                membersModal.style.display = 'flex';
+                fetchAndDisplayMembers();
+            } else {
+                console.error('Members modal not found');
+            }
+        });
+    } else {
+        console.error('Member count element not found');
+    }
+
+    // Close members modal
+    if (closeMembersBtn) {
+        closeMembersBtn.addEventListener('click', () => {
+            if (membersModal) {
+                membersModal.style.display = 'none';
+            }
+        });
+    }
+
+    // Close members modal on backdrop click
+    if (membersModal) {
+        membersModal.addEventListener('click', (e) => {
+            if (e.target === membersModal) {
+                membersModal.style.display = 'none';
+            }
+        });
+    }
+
     // Next/Previous song buttons
     if (nextBtn) {
         nextBtn.addEventListener('click', () => {
@@ -1294,12 +1332,73 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('keydown', enableAudioContext);
 
     // =================================================================================
+    // Device Detection Functions
+    // =================================================================================
+
+    function getDeviceInfo() {
+        const userAgent = navigator.userAgent;
+        
+        // Detect browser
+        let browser = 'Unknown Browser';
+        if (userAgent.includes('Chrome') && !userAgent.includes('Edg')) {
+            browser = 'Chrome';
+        } else if (userAgent.includes('Firefox')) {
+            browser = 'Firefox';
+        } else if (userAgent.includes('Safari') && !userAgent.includes('Chrome')) {
+            browser = 'Safari';
+        } else if (userAgent.includes('Edg')) {
+            browser = 'Edge';
+        } else if (userAgent.includes('Opera') || userAgent.includes('OPR')) {
+            browser = 'Opera';
+        }
+        
+        // Detect OS
+        let os = 'Unknown OS';
+        if (userAgent.includes('Windows')) {
+            os = 'Windows';
+        } else if (userAgent.includes('Mac OS')) {
+            os = 'macOS';
+        } else if (userAgent.includes('Android')) {
+            os = 'Android';
+        } else if (userAgent.includes('Linux')) {
+            os = 'Linux';
+        } else if (userAgent.includes('iPhone') || userAgent.includes('iPad')) {
+            os = 'iOS';
+        }
+        
+        // Detect device type
+        let deviceType = 'Desktop';
+        if (userAgent.includes('Mobile') || userAgent.includes('Android')) {
+            deviceType = 'Mobile';
+        } else if (userAgent.includes('iPad') || userAgent.includes('Tablet')) {
+            deviceType = 'Tablet';
+        }
+        
+        return {
+            browser,
+            os,
+            deviceType,
+            userAgent: userAgent.substring(0, 100) // Truncate for storage
+        };
+    }
+
+    // =================================================================================
     // Socket.IO Event Handlers (Commands from Server)
     // =================================================================================
 
     socket.on('connect', () => {
         console.log('Connected! Joining room:', roomId);
-        socket.emit('join', { room: roomId });
+        
+        // Get device information
+        const deviceInfo = getDeviceInfo();
+        console.log('Device info:', deviceInfo);
+        
+        // Send join request with device information
+        socket.emit('join', { 
+            room: roomId,
+            deviceInfo: deviceInfo
+        });
+        
         syncClock();
         if (pingInterval) clearInterval(pingInterval);
         pingInterval = setInterval(syncClock, 15000);
@@ -2615,8 +2714,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateMemberCount(count) {
+        // Update the member count in the members button
         const memberCountElement = document.querySelector('.member-count');
         if (memberCountElement) {
+            // Keep the icon and update the text
             memberCountElement.innerHTML = `<i class="fa-solid fa-user-group"></i> ${count}`;
             console.log(`Member count updated: ${count}`);
         }
@@ -3988,6 +4089,180 @@ document.addEventListener('fullscreenchange', () => {
             e.preventDefault();
             hideFullscreenLyrics();
         }
+    });
+
+    // ===============================
+    // Members List Functions
+    // ===============================
+
+    // State for members list
+    let currentMembers = [];
+
+    async function fetchAndDisplayMembers() {
+        // Get membersList element dynamically in case it wasn't available during initialization
+        const membersList = document.getElementById('members-list');
+        
+        if (!membersList) {
+            console.error('membersList element not found');
+            return;
+        }
+
+        // Show loading state
+        membersList.innerHTML = '<p class="loading-members">Loading members...</p>';
+
+        try {
+            // Request member list from server
+            console.log('Requesting member list for room:', roomId);
+            console.log('roomId type:', typeof roomId);
+            console.log('roomId value:', roomId);
+            
+            if (!roomId) {
+                console.error('roomId is undefined or empty');
+                showMembersError('Room ID not found. Please refresh the page.');
+                return;
+            }
+            
+            socket.emit('request_member_list', { room: roomId });
+        } catch (error) {
+            console.error('Error requesting member list:', error);
+            showMembersError('Failed to load members. Please try again.');
+        }
+    }
+
+    function showMembersError(message) {
+        const membersList = document.getElementById('members-list');
+        if (membersList) {
+            membersList.innerHTML = `<p class="no-members">${message}</p>`;
+        }
+    }
+
+    function updateMembersList(members) {
+        const membersList = document.getElementById('members-list');
+        if (!membersList) return;
+        
+        currentMembers = members || [];
+        
+        if (currentMembers.length === 0) {
+            membersList.innerHTML = '<p class="no-members">No members in this room</p>';
+            return;
+        }
+
+        const membersHTML = currentMembers.map((member, index) => {
+            // Generate avatar icon based on operating system
+            let avatarIcon = '<i class="fas fa-user"></i>'; // Default fallback
+            if (member.os) {
+                switch (member.os.toLowerCase()) {
+                    case 'windows':
+                        avatarIcon = '<i class="fab fa-windows"></i>';
+                        break;
+                    case 'android':
+                        avatarIcon = '<i class="fab fa-android"></i>';
+                        break;
+                    case 'ios':
+                        avatarIcon = '<i class="fab fa-apple"></i>';
+                        break;
+                    case 'macos':
+                        avatarIcon = '<i class="fab fa-apple"></i>';
+                        break;
+                    case 'linux':
+                        avatarIcon = '<i class="fab fa-linux"></i>';
+                        break;
+                    default:
+                        avatarIcon = '<i class="fas fa-desktop"></i>';
+                        break;
+                }
+            }
+            
+            const memberName = member.name || `User ${index + 1}`;
+            
+            // Calculate relative join time
+            let joinTimeText = 'Unknown';
+            if (member.joinTime) {
+                const joinDate = new Date(member.joinTime);
+                const now = new Date();
+                const diffMs = now - joinDate;
+                const diffSeconds = Math.floor(diffMs / 1000);
+                const diffMinutes = Math.floor(diffSeconds / 60);
+                const diffHours = Math.floor(diffMinutes / 60);
+                const diffDays = Math.floor(diffHours / 24);
+                
+                if (diffSeconds < 60) {
+                    joinTimeText = diffSeconds <= 5 ? 'Just joined' : `Joined ${diffSeconds} seconds ago`;
+                } else if (diffMinutes < 60) {
+                    joinTimeText = diffMinutes === 1 ? 'Joined 1 minute ago' : `Joined ${diffMinutes} minutes ago`;
+                } else if (diffHours < 24) {
+                    joinTimeText = diffHours === 1 ? 'Joined 1 hour ago' : `Joined ${diffHours} hours ago`;
+                } else {
+                    joinTimeText = diffDays === 1 ? 'Joined 1 day ago' : `Joined ${diffDays} days ago`;
+                }
+            }
+            
+            // Create device info string
+            let deviceInfo = '';
+            if (member.browser && member.os) {
+                deviceInfo = `${member.browser} • ${member.os}`;
+                if (member.deviceType && member.deviceType !== 'Desktop') {
+                    deviceInfo += ` • ${member.deviceType}`;
+                }
+            }
+            
+            // Create host badge if this member is the host
+            const hostBadge = member.is_host ? '<div class="member-host-badge"></div>' : '';
+            
+            return `
+                <div class="member-item">
+                    <div class="member-avatar">${avatarIcon}</div>
+                    <div class="member-info">
+                        <div class="member-name">${memberName}</div>
+                        <div class="member-device">${deviceInfo}</div>
+                        <div class="member-status online">${joinTimeText}</div>
+                    </div>
+                    ${hostBadge}
+                </div>
+            `;
+        }).join('');
+
+        // Get membersList again to ensure it's current
+        const membersListElement = document.getElementById('members-list');
+        if (membersListElement) {
+            membersListElement.innerHTML = membersHTML;
+        }
+    }
+
+    // Listen for member list updates from server
+    socket.on('member_list_update', (data) => {
+        console.log('Received member list update:', data);
+        if (data.members) {
+            updateMembersList(data.members);
+        }
+    });
+
+    // Listen for individual member join/leave events
+    socket.on('member_joined', (data) => {
+        console.log('Member joined:', data);
+        // Refresh member list if modal is open
+        if (membersModal && membersModal.style.display === 'flex') {
+            fetchAndDisplayMembers();
+        }
+    });
+
+    socket.on('member_left', (data) => {
+        console.log('Member left:', data);
+        // Refresh member list if modal is open
+        if (membersModal && membersModal.style.display === 'flex') {
+            fetchAndDisplayMembers();
+        }
+    });
+
+    // Listen for host change events
+    socket.on('host_changed', (data) => {
+        console.log('Host changed:', data);
+        // Refresh member list to update host badges
+        if (membersModal && membersModal.style.display === 'flex') {
+            fetchAndDisplayMembers();
+        }
+        // Optionally show a notification about the host change
+        // You could add a toast notification here if desired
     });
 });
 
