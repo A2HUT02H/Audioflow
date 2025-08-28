@@ -677,6 +677,7 @@ def create_room():
         'last_progress_s': 0,
         'last_updated_at': time.time(),
         'members': 0,  # Initialize member count
+        'member_list': {},  # Store detailed member information
         'queue': [],  # Initialize queue for multiple audio files
         'current_index': -1,  # Index of currently playing song in queue
         'is_shuffling': False,  # Shuffle state
@@ -711,9 +712,40 @@ def on_join(data):
         print(f"--- JOIN SUCCESS: Client {request.sid} successfully joined room {room} ---")
         print(f"Client {request.sid} joined room: {room}")
         with thread_lock:
-            # Update member count
+            # Update member count and list
             if 'members' not in rooms_data[room]:
                 rooms_data[room]['members'] = 0
+            if 'member_list' not in rooms_data[room]:
+                rooms_data[room]['member_list'] = {}
+            if 'host_id' not in rooms_data[room]:
+                rooms_data[room]['host_id'] = None
+            
+            # Check if this is the first member (becomes host)
+            is_host = len(rooms_data[room]['member_list']) == 0
+            if is_host:
+                rooms_data[room]['host_id'] = request.sid
+            
+            # Add member to the list
+            device_info = data.get('deviceInfo', {})
+            browser = device_info.get('browser', 'Unknown Browser')
+            os = device_info.get('os', 'Unknown OS')
+            device_type = device_info.get('deviceType', 'Desktop')
+            
+            # Create a more descriptive name
+            default_name = f"{browser} on {os}"
+            if device_type != 'Desktop':
+                default_name = f"{browser} ({device_type})"
+            
+            member_info = {
+                'id': request.sid,
+                'name': device_info.get('userName') or default_name,
+                'browser': browser,
+                'os': os,
+                'deviceType': device_type,
+                'joinTime': time.time() * 1000,  # JavaScript timestamp
+                'is_host': is_host
+            }
+            rooms_data[room]['member_list'][request.sid] = member_info
             rooms_data[room]['members'] += 1
             member_count = rooms_data[room]['members']
 
@@ -735,6 +767,14 @@ def on_join(data):
             # Broadcast member count update to all clients in the room
             socketio.emit('member_count_update', {
                 'count': member_count}, to=room)
+            
+            # Broadcast member list update to all clients in the room
+            socketio.emit('member_list_update', {
+                'members': list(rooms_data[room].get('member_list', {}).values())
+            }, to=room)
+            socketio.emit('member_list_update', {
+                'members': list(rooms_data[room].get('member_list', {}).values())
+            }, to=room)
     else:
         print(f"--- JOIN FAILED: Room {room} does not exist. ---")
         emit('error', {'message': 'Room not found.'})
@@ -748,6 +788,13 @@ def on_disconnect():
             print(f"--- DISCONNECT: Client was in room {room_id}. Processing member count... ---")
             with thread_lock:
                 if room_id in rooms_data and 'members' in rooms_data[room_id]:
+                    # Check if the leaving member was the host
+                    was_host = rooms_data[room_id].get('host_id') == request.sid
+                    
+                    # Remove member from member list
+                    if 'member_list' in rooms_data[room_id] and request.sid in rooms_data[room_id]['member_list']:
+                        del rooms_data[room_id]['member_list'][request.sid]
+                    
                     rooms_data[room_id]['members'] -= 1
 
                     if rooms_data[room_id]['members'] < 0:
@@ -755,10 +802,31 @@ def on_disconnect():
                     
                     new_count = rooms_data[room_id]['members']
 
+                    # If host left and there are still members, assign new host
+                    if was_host and new_count > 0:
+                        # Get the first remaining member as new host
+                        remaining_members = list(rooms_data[room_id]['member_list'].keys())
+                        if remaining_members:
+                            new_host_id = remaining_members[0]
+                            rooms_data[room_id]['host_id'] = new_host_id
+                            # Update the new host's member info
+                            if new_host_id in rooms_data[room_id]['member_list']:
+                                rooms_data[room_id]['member_list'][new_host_id]['is_host'] = True
+                            print(f"Host transferred from {request.sid} to {new_host_id}")
+                            # Emit host change notification
+                            socketio.emit('host_changed', {
+                                'new_host_id': new_host_id,
+                                'new_host_name': rooms_data[room_id]['member_list'][new_host_id]['name']
+                            }, to=room_id)
+
                     leave_room(room_id)
                     print(f"Client {request.sid} left room: {room_id}, new member count: {new_count}")
                     # Emit updated member count to the room
                     socketio.emit('member_count_update', {'count': new_count}, to=room_id)
+                    # Also emit updated member list
+                    socketio.emit('member_list_update', {
+                        'members': list(rooms_data[room_id].get('member_list', {}).values())
+                    }, to=room_id)
                     if new_count == 0:
                          print(f"Room {room_id} is now empty, cleaning up")
                          # Reset room state but keep the room for potential rejoins
@@ -1083,6 +1151,38 @@ def handle_shuffle_next(data):
         'current_index': random_index
     }, to=room)
 
+
+@socketio.on('request_member_list')
+def handle_request_member_list(data):
+    """Handle request for member list"""
+    room = data.get('room')
+    print(f"[DEBUG] request_member_list received for room: {room}")
+    if room in rooms_data:
+        with thread_lock:
+            member_list = list(rooms_data[room].get('member_list', {}).values())
+            print(f"[DEBUG] Found {len(member_list)} members: {member_list}")
+            emit('member_list_update', {'members': member_list})
+    else:
+        print(f"[DEBUG] Room {room} not found in rooms_data")
+        emit('member_list_update', {'members': []})
+
+
+@socketio.on('reorder_queue')
+def handle_reorder_queue(data):
+    """Handle queue reordering from drag-and-drop"""
+    room = data.get('room')
+    new_order = data.get('new_order', [])
+    
+    if room in rooms_data and new_order:
+        with thread_lock:
+            # Update the queue with the new order
+            rooms_data[room]['queue'] = new_order
+            
+            # Emit the updated queue to all clients in the room
+            socketio.emit('queue_update', {
+                'queue': new_order,
+                'current_index': rooms_data[room].get('current_queue_index', 0)
+            }, to=room)
 
 # =================================================================================
 # Application Entry Point
