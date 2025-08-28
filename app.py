@@ -362,7 +362,7 @@ def upload():
 
         # Extract metadata
         metadata = extract_metadata(file_path)
-        print(f"[Room {room}] - Metadata extracted: {metadata}")
+        print(f"[Room {room} - Metadata extracted: {metadata}")
 
         final_cover_filename = None
         # Extract cover art
@@ -606,6 +606,51 @@ def remove_from_queue(room_id, index):
         elif index < current_index:
             # Adjust current_index down by 1
             rooms_data[room_id]['current_index'] = current_index - 1
+    
+    # Update queue status
+    socketio.emit('queue_update', {
+        'queue': rooms_data[room_id]['queue'],
+        'current_index': rooms_data[room_id]['current_index']
+    }, to=room_id)
+    
+    return jsonify({'success': True})
+
+@app.route('/queue/<string:room_id>/reorder', methods=['POST'])
+def reorder_queue(room_id):
+    """Reorder songs in the queue."""
+    if room_id not in rooms_data:
+        return jsonify({'error': 'Room not found'}), 404
+    
+    data = request.get_json()
+    if not data or 'from_index' not in data or 'to_index' not in data:
+        return jsonify({'error': 'Missing from_index or to_index'}), 400
+    
+    from_index = data['from_index']
+    to_index = data['to_index']
+    
+    with thread_lock:
+        queue = rooms_data[room_id].get('queue', [])
+        current_index = rooms_data[room_id].get('current_index', -1)
+        
+        if from_index < 0 or from_index >= len(queue) or to_index < 0 or to_index >= len(queue):
+            return jsonify({'error': 'Invalid queue indices'}), 400
+        
+        # Remove item from current position
+        item = queue.pop(from_index)
+        
+        # Insert item at new position
+        queue.insert(to_index, item)
+        
+        # Adjust current_index if necessary
+        if current_index == from_index:
+            # If we moved the currently playing song
+            rooms_data[room_id]['current_index'] = to_index
+        elif from_index < current_index <= to_index:
+            # If we moved an item from before current to after current
+            rooms_data[room_id]['current_index'] = current_index - 1
+        elif to_index <= current_index < from_index:
+            # If we moved an item from after current to before current
+            rooms_data[room_id]['current_index'] = current_index + 1
     
     # Update queue status
     socketio.emit('queue_update', {
