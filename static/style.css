@@ -1169,6 +1169,290 @@ body.fullscreen-mode.lyrics-active .main-header {
     background: transparent;
 }
 
+/* ===============================
+   Members Modal Styles
+   =============================== */
+.members-modal {
+    display: none;
+    position: fixed;
+    z-index: 2000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(5px);
+}
+
+.members-modal-content {
+    background: linear-gradient(135deg, 
+        rgba(30, 30, 35, 0.95) 0%, 
+        rgba(25, 25, 30, 0.95) 100%);
+    margin: 5% auto;
+    padding: 0;
+    border-radius: 20px;
+    width: 90%;
+    max-width: 500px;
+    max-height: 80vh;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+    overflow: hidden;
+    backdrop-filter: blur(10px);
+}
+
+/* Smaller scale for PC users */
+@media (min-width: 1024px) {
+    .members-modal-content {
+        max-width: 380px;
+        border-radius: 16px;
+        margin: 8% auto;
+    }
+}
+
+.members-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.5rem 2rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+/* Smaller header for PC */
+@media (min-width: 1024px) {
+    .members-modal-header {
+        padding: 1rem 1.5rem;
+    }
+}
+
+.members-modal-header h3 {
+    margin: 0;
+    color: var(--text-color);
+    font-size: 1.5rem;
+    font-weight: 600;
+}
+
+/* Smaller header text for PC */
+@media (min-width: 1024px) {
+    .members-modal-header h3 {
+        font-size: 1.2rem;
+    }
+}
+
+.close-members-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted-color);
+    font-size: 2rem;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: all 0.3s ease;
+}
+
+/* Smaller close button for PC */
+@media (min-width: 1024px) {
+    .close-members-btn {
+        font-size: 1.5rem;
+        width: 24px;
+        height: 24px;
+    }
+}
+
+.close-members-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-color);
+}
+
+.members-modal-body {
+    padding: 0;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.members-list {
+    padding: 1rem;
+    max-height: 400px;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+/* Smaller padding and height for PC */
+@media (min-width: 1024px) {
+    .members-list {
+        padding: 0.75rem;
+        max-height: 300px;
+    }
+}
+
+.member-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.5rem 0.8rem;
+    border-radius: 12px;
+    margin-bottom: 0.3rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: all 0.3s ease;
+}
+
+/* Smaller member items for PC */
+@media (min-width: 1024px) {
+    .member-item {
+        gap: 0.75rem;
+        padding: 0.4rem 0.6rem;
+        border-radius: 10px;
+        margin-bottom: 0.25rem;
+    }
+}
+
+.member-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+    transform: translateY(-1px);
+}
+
+.member-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--primary-color, #60a5fa), var(--secondary-color, #a855f7));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    color: white;
+    font-size: 1.2rem;
+}
+
+/* Smaller avatar for PC */
+@media (min-width: 1024px) {
+    .member-avatar {
+        width: 32px;
+        height: 32px;
+        font-size: 1rem;
+    }
+}
+
+.member-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    text-align: left;
+}
+
+.member-name {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 0.1rem;
+    text-align: left;
+    align-self: flex-start;
+}
+
+/* Smaller member name for PC */
+@media (min-width: 1024px) {
+    .member-name {
+        font-size: 0.9rem;
+        margin-bottom: 0.05rem;
+    }
+}
+
+.member-device {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.6);
+    margin-bottom: 0.1rem;
+    text-align: left;
+    align-self: flex-start;
+}
+
+/* Smaller device info for PC */
+@media (min-width: 1024px) {
+    .member-device {
+        font-size: 0.65rem;
+        margin-bottom: 0.05rem;
+    }
+}
+
+.member-host-badge {
+    background: transparent;
+    color: #000;
+    font-size: 0.7rem;
+    font-weight: bold;
+    padding: 0.3rem;
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.8rem;
+    height: 1.8rem;
+}
+
+/* Smaller host badge for PC */
+@media (min-width: 1024px) {
+    .member-host-badge {
+        font-size: 0.6rem;
+        padding: 0.25rem;
+        width: 1.5rem;
+        height: 1.5rem;
+    }
+}
+
+.member-host-badge::before {
+    content: "\f521";
+    font-family: "Font Awesome 6 Free";
+    font-weight: 900;
+    font-size: 0.8rem;
+    color: #ffd700;
+}
+
+/* Smaller crown for PC */
+@media (min-width: 1024px) {
+    .member-host-badge::before {
+        font-size: 0.7rem;
+    }
+}
+
+.member-status {
+    font-size: 0.8rem;
+    color: var(--text-muted-color);
+    text-align: left;
+    align-self: flex-start;
+}
+
+/* Smaller status text for PC */
+@media (min-width: 1024px) {
+    .member-status {
+        font-size: 0.7rem;
+    }
+}
+
+.member-status.online {
+    color: #4ade80;
+}
+
+.loading-members, .no-members {
+    text-align: center;
+    color: var(--text-muted-color);
+    font-style: italic;
+    padding: 2rem;
+}
+
+.lyrics-modal-body::-webkit-scrollbar-track {
+    background: transparent;
+}
+
 .lyrics-content {
     line-height: 1.8;
     white-space: pre-line;
@@ -2658,6 +2942,35 @@ body.fullscreen-mode .cover-section.fullscreen-cover-prev-in .cover-art-placehol
     align-items: center; /* Vertically aligns the text and the button */
     gap: 0.75rem; /* Adds a small space between the code and the button */
     margin-top: 0.5rem;
+}
+
+.member-count {
+    cursor: pointer;
+    padding: 0.4rem 0.8rem;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: linear-gradient(135deg, 
+        rgba(255, 255, 255, 0.1) 0%,
+        rgba(255, 255, 255, 0.05) 50%,
+        rgba(255, 255, 255, 0.02) 100%);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    color: rgba(255, 255, 255, 0.9);
+    text-decoration: none;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    font-size: 0.9rem;
+}
+
+.member-count:hover {
+    border-color: rgba(255, 255, 255, 0.25);
+    background: linear-gradient(135deg, 
+        rgba(255, 255, 255, 0.15) 0%,
+        rgba(255, 255, 255, 0.08) 50%,
+        rgba(255, 255, 255, 0.04) 100%);
+    transform: translateY(-1px);
+    box-shadow: 
+        0 8px 32px 0 rgba(31, 38, 135, 0.3),
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.15);
 }
 
 .create-new-room-button {
