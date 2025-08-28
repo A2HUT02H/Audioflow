@@ -1151,6 +1151,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (memberCount) {
         memberCount.addEventListener('click', () => {
             console.log('Member count button clicked!');
+			 // Disable member modal in fullscreen mode
+            if (document.body.classList.contains('fullscreen-mode')) {
+                console.log('Member modal disabled in fullscreen mode');
+                return;
+            }
+			
             if (membersModal) {
                 console.log('Opening members modal');
                 membersModal.style.display = 'flex';
@@ -4389,3 +4395,4 @@ function getCssColorBrightness(str) {
     if (!rgb) return 255;
     return (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
 }
+
