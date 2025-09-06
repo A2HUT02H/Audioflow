@@ -8,6 +8,10 @@ import time
 import mimetypes
 import uuid
 import traceback
+import urllib.parse
+import re
+import random
+import io
 from threading import Lock
 
 # --- Third-Party Imports ---
@@ -18,7 +22,283 @@ from mutagen import File as MutagenFile
 from mutagen.id3 import APIC
 from mutagen.mp4 import MP4Cover
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import syncedlyrics
+from urllib.parse import urlparse
+import threading
+import time as _time
+from collections import OrderedDict
+from ytmusicapi import YTMusic
+import yt_dlp
+import concurrent.futures
+from PIL import Image
+import io
+
+# --- Configure optimized HTTP session for downloads ---
+def create_download_session():
+    """Create an optimized requests session for downloads."""
+    session = requests.Session()
+    
+    # Configure retry strategy
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    
+    # Configure adapter with connection pooling and increased buffer sizes
+    adapter = HTTPAdapter(
+        max_retries=retry_strategy,
+        pool_connections=20,
+        pool_maxsize=40
+    )
+    
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    # Set optimized headers to mimic browser behavior
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+        'Accept': 'audio/webm,audio/ogg,audio/wav,audio/*;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1'
+    })
+    
+    return session
+
+# Global download session
+download_session = create_download_session()
+
+def download_with_ytdlp(video_id, filepath, room):
+    """Try downloading directly with yt-dlp for potentially better speed."""
+    try:
+        print(f"[Room {room}] - Attempting yt-dlp direct download for video: {video_id}")
+        
+        # Use the best available format without conversion for maximum speed
+        ydl_opts = {
+            'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio[ext=ogg]/bestaudio/best',
+            'noplaylist': True,
+            'quiet': False,
+            'no_warnings': False,
+            'outtmpl': os.path.splitext(filepath)[0] + '.%(ext)s',  # Let yt-dlp choose extension
+            'concurrent_fragment_downloads': 8,  # More parallel downloads
+            'http_chunk_size': 2097152,  # 2MB chunks for faster download
+            'retries': 3,
+            'fragment_retries': 3,
+            # Explicitly disable any audio processing to prevent conversion
+            'extractaudio': False,  # Do not extract/convert audio
+            'postprocessors': [],   # No postprocessors
+            'writeautomaticsub': False,
+            'writesubtitles': False,
+        }
+        
+        start_time = time.time()
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+        
+        # Find the downloaded file (could be any supported format)
+        base_path = os.path.splitext(filepath)[0]
+        possible_extensions = ['m4a', 'webm', 'ogg', 'mp3', 'opus', 'wav']
+        downloaded_file = None
+        
+        for ext in possible_extensions:
+            test_path = f"{base_path}.{ext}"
+            if os.path.exists(test_path):
+                downloaded_file = test_path
+                break
+        
+        if downloaded_file:
+            # Update the filepath to match the actual downloaded format
+            final_filename = os.path.basename(downloaded_file)
+            final_filepath = os.path.join(os.path.dirname(filepath), final_filename)
+            
+            if downloaded_file != final_filepath:
+                os.rename(downloaded_file, final_filepath)
+            
+            end_time = time.time()
+            download_time = end_time - start_time
+            file_size = os.path.getsize(final_filepath)
+            speed_mbps = (file_size / 1024 / 1024) / download_time if download_time > 0 else 0
+            print(f"[Room {room}] - yt-dlp download successful: {final_filename} ({file_size/1024/1024:.2f}MB in {download_time:.2f}s, {speed_mbps:.2f}MB/s)")
+            
+            # Return the actual filename that was downloaded
+            return final_filename
+        
+        print(f"[Room {room}] - yt-dlp download failed: No output file found")
+        return False
+        
+    except Exception as e:
+        print(f"[Room {room}] - yt-dlp download failed: {e}")
+        # Clean up any partial files
+        base_path = os.path.splitext(filepath)[0]
+        for ext in ['m4a', 'webm', 'ogg', 'mp3', 'opus', 'wav']:
+            partial_file = f"{base_path}.{ext}"
+            if os.path.exists(partial_file):
+                try:
+                    os.remove(partial_file)
+                except:
+                    pass
+        return False
+
+def download_with_range_requests(url, filepath, room):
+    """Try to download using multiple parallel range requests for better speed."""
+    try:
+        print(f"[Room {room}] - Attempting parallel range request download")
+        
+        # Get file size first
+        head_response = download_session.head(url, timeout=30)
+        if 'Accept-Ranges' not in head_response.headers or head_response.headers['Accept-Ranges'] != 'bytes':
+            print(f"[Room {room}] - Server doesn't support range requests")
+            return False
+        
+        content_length = head_response.headers.get('Content-Length')
+        if not content_length:
+            print(f"[Room {room}] - No Content-Length header, cannot use range requests")
+            return False
+        
+        total_size = int(content_length)
+        if total_size < 1024 * 1024:  # Less than 1MB, not worth parallelizing
+            print(f"[Room {room}] - File too small for parallel download")
+            return False
+        
+        # Split into 4 chunks
+        num_chunks = 4
+        chunk_size = total_size // num_chunks
+        
+        def download_chunk(start, end, chunk_index):
+            """Download a specific chunk of the file."""
+            try:
+                headers = {'Range': f'bytes={start}-{end}'}
+                response = download_session.get(url, headers=headers, stream=True, timeout=120)
+                response.raise_for_status()
+                
+                chunk_data = b''
+                for data in response.iter_content(chunk_size=65536):  # 64KB sub-chunks
+                    if data:
+                        chunk_data += data
+                
+                return chunk_index, chunk_data
+            except Exception as e:
+                print(f"[Room {room}] - Chunk {chunk_index} download failed: {e}")
+                return chunk_index, None
+        
+        # Download chunks in parallel
+        start_time = time.time()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            futures = []
+            for i in range(num_chunks):
+                start = i * chunk_size
+                end = start + chunk_size - 1 if i < num_chunks - 1 else total_size - 1
+                future = executor.submit(download_chunk, start, end, i)
+                futures.append(future)
+            
+            # Collect results
+            chunks = [None] * num_chunks
+            for future in concurrent.futures.as_completed(futures):
+                chunk_index, chunk_data = future.result()
+                if chunk_data is None:
+                    print(f"[Room {room}] - Parallel download failed, chunk {chunk_index} missing")
+                    return False
+                chunks[chunk_index] = chunk_data
+        
+        # Write chunks to file
+        with open(filepath, 'wb') as f:
+            for chunk_data in chunks:
+                f.write(chunk_data)
+        
+        end_time = time.time()
+        download_time = end_time - start_time
+        speed_mbps = (total_size / 1024 / 1024) / download_time if download_time > 0 else 0
+        print(f"[Room {room}] - Parallel download successful: {total_size/1024/1024:.2f}MB in {download_time:.2f}s, {speed_mbps:.2f}MB/s")
+        return True
+        
+    except Exception as e:
+        print(f"[Room {room}] - Parallel download failed: {e}")
+        return False
+        # First, get the file size
+        head_response = download_session.head(url, timeout=30)
+        if head_response.status_code != 200:
+            return False
+        
+        # Check if server supports range requests
+        accept_ranges = head_response.headers.get('Accept-Ranges', '').lower()
+        content_length = head_response.headers.get('Content-Length')
+        
+        if accept_ranges != 'bytes' or not content_length:
+            return False  # Fallback to regular download
+        
+        total_size = int(content_length)
+        if total_size < 1024 * 1024:  # Less than 1MB, use regular download
+            return False
+        
+        print(f"[Room {room}] - Attempting parallel download for {total_size/1024/1024:.2f}MB file")
+        
+        # Split into 4 chunks for parallel download
+        chunk_size = total_size // 4
+        chunks = []
+        
+        def download_chunk(start, end, chunk_idx):
+            try:
+                headers = {'Range': f'bytes={start}-{end}'}
+                response = download_session.get(url, headers=headers, stream=True, timeout=60)
+                if response.status_code == 206:  # Partial content
+                    data = b''
+                    for chunk in response.iter_content(chunk_size=65536):
+                        if chunk:
+                            data += chunk
+                    return chunk_idx, data
+                return chunk_idx, None
+            except Exception as e:
+                print(f"[Room {room}] - Chunk {chunk_idx} failed: {e}")
+                return chunk_idx, None
+        
+        # Download chunks in parallel
+        start_time = time.time()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            futures = []
+            for i in range(4):
+                start = i * chunk_size
+                end = start + chunk_size - 1 if i < 3 else total_size - 1
+                futures.append(executor.submit(download_chunk, start, end, i))
+            
+            # Collect results
+            chunk_results = [None] * 4
+            for future in concurrent.futures.as_completed(futures):
+                chunk_idx, data = future.result()
+                chunk_results[chunk_idx] = data
+        
+        # Check if all chunks downloaded successfully
+        if any(data is None for data in chunk_results):
+            print(f"[Room {room}] - Parallel download failed, some chunks missing")
+            return False
+        
+        # Write chunks in order
+        with open(filepath, 'wb') as f:
+            for data in chunk_results:
+                f.write(data)
+        
+        end_time = time.time()
+        download_time = end_time - start_time
+        speed_mbps = (total_size / 1024 / 1024) / download_time if download_time > 0 else 0
+        print(f"[Room {room}] - Parallel download successful: {total_size/1024/1024:.2f}MB in {download_time:.2f}s, {speed_mbps:.2f}MB/s")
+        return True
+        
+    except Exception as e:
+        print(f"[Room {room}] - Parallel download failed: {e}")
+        return False
+
+# --- Load environment variables from .env file if it exists ---
+try:
+    from dotenv import load_dotenv
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
+except ImportError:
+    # python-dotenv not installed, skip loading .env file
+    pass
 
 # --- App and Global Variable Setup ---
 thread_lock = Lock()
@@ -314,6 +594,730 @@ def serve_file(filename):
     except Exception as e:
         print(f"[DEBUG] Fallback to original filename due to error: {e}")
         return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+
+# ==================================================================
+# YouTube Music search + streaming proxy support
+# ==================================================================
+# Configuration for YouTube Music API
+USE_MOCK_API = os.environ.get('USE_MOCK_YTMUSIC', 'false').lower() == 'true'
+
+# Simple in-memory mapping for resolved download links with expiry
+# key: proxy_id, value: { 'url': original_url, 'expires_at': timestamp }
+proxy_url_map = OrderedDict()
+proxy_lock = threading.Lock()
+PROXY_TTL = int(os.environ.get('YTMUSIC_PROXY_TTL', '300'))  # seconds
+
+# Initialize YouTube Music API client
+ytmusic = None
+try:
+    if not USE_MOCK_API:
+        ytmusic = YTMusic()
+        print("[DEBUG] YouTube Music API initialized successfully")
+except Exception as e:
+    print(f"[DEBUG] Failed to initialize YouTube Music API: {e}")
+    print("[DEBUG] Falling back to mock mode")
+    USE_MOCK_API = True
+
+def cleanup_proxy_map():
+    """Background cleaner for expired proxy entries."""
+    while True:
+        with proxy_lock:
+            now = _time.time()
+            keys = [k for k, v in proxy_url_map.items() if v['expires_at'] <= now]
+            for k in keys:
+                del proxy_url_map[k]
+        _time.sleep(30)
+
+# Start cleaner thread (daemon)
+cleanup_thread = threading.Thread(target=cleanup_proxy_map, daemon=True)
+cleanup_thread.start()
+
+def add_proxy_url(original_url):
+    """Add a resolved URL to the proxy map and return a short id."""
+    proxy_id = uuid.uuid4().hex[:12]
+    expires_at = _time.time() + PROXY_TTL
+    with proxy_lock:
+        proxy_url_map[proxy_id] = {'url': original_url, 'expires_at': expires_at}
+    print(f"[DEBUG] Added proxy_id: {proxy_id} for URL: {original_url}")
+    return proxy_id
+
+def get_proxy_url(proxy_id):
+    with proxy_lock:
+        entry = proxy_url_map.get(proxy_id)
+        print(f"[DEBUG] Looking up proxy_id: {proxy_id}, found: {entry is not None}")
+        if not entry:
+            print(f"[DEBUG] Available proxy_ids: {list(proxy_url_map.keys())}")
+            return None
+        # refresh expiry on access
+        entry['expires_at'] = _time.time() + PROXY_TTL
+        print(f"[DEBUG] Returning URL: {entry['url']}")
+        return entry['url']
+
+def enhance_youtube_thumbnail_quality(url, video_id=None):
+    """
+    Get YouTube thumbnail using the high-quality URL format and extract video ID if needed.
+    Uses the format: https://img.youtube.com/vi/{video_id}/maxresdefault.jpg
+    """
+    try:
+        # If video_id is provided directly, use it
+        if video_id:
+            print(f"[DEBUG] Using provided video_id: {video_id}")
+            return f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg"
+        
+        # Extract video ID from any YouTube URL
+        if not url or 'youtube' not in url.lower() and 'ytimg' not in url.lower():
+            return url
+        
+        extracted_video_id = None
+        
+        # Try multiple patterns to extract video ID
+        patterns = [
+            r'/vi/([^/]+)/',              # i.ytimg.com format
+            r'vi/([^/]+)/[^/]+\.jpg',     # Alternative ytimg format
+            r'videoId[=/]([a-zA-Z0-9_-]{11})',  # Direct video ID
+            r'v[=/]([a-zA-Z0-9_-]{11})',  # YouTube URL format
+            r'([a-zA-Z0-9_-]{11})',       # Any 11-character string (video ID pattern)
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                potential_id = match.group(1)
+                # Validate it's a proper YouTube video ID (11 characters, alphanumeric + _ -)
+                if len(potential_id) == 11 and re.match(r'^[a-zA-Z0-9_-]+$', potential_id):
+                    extracted_video_id = potential_id
+                    break
+        
+        if extracted_video_id:
+            high_quality_url = f"https://img.youtube.com/vi/{extracted_video_id}/maxresdefault.jpg"
+            print(f"[DEBUG] Generated high-quality URL: {high_quality_url}")
+            return high_quality_url
+        
+        print(f"[DEBUG] Could not extract video ID from URL: {url}")
+        return url
+        
+    except Exception as e:
+        print(f"[DEBUG] Error enhancing thumbnail URL: {e}")
+        return url
+
+def crop_image_to_square(image_data):
+    """
+    Crop a rectangular image to 1:1 square ratio from the center.
+    Automatically detects and removes black bars by scanning pixel brightness.
+    """
+    try:
+        # Open image from bytes
+        img = Image.open(io.BytesIO(image_data))
+        
+        # Convert to RGB if needed for consistent processing
+        if img.mode in ('RGBA', 'LA', 'P'):
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            if img.mode == 'P':
+                img = img.convert('RGBA')
+            if img.mode in ('RGBA', 'LA'):
+                background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
+            else:
+                background.paste(img)
+            img = background
+        
+        width, height = img.size
+        print(f"[DEBUG] Original image dimensions: {width}x{height}")
+        
+        # Convert to numpy array for efficient processing
+        import numpy as np
+        img_array = np.array(img)
+        
+        # Calculate brightness for each pixel (luminance)
+        if len(img_array.shape) == 3:
+            # RGB image - calculate luminance using standard weights
+            brightness = np.dot(img_array[...,:3], [0.299, 0.587, 0.114])
+        else:
+            # Grayscale image
+            brightness = img_array
+        
+        # Define black bar threshold (adjust as needed)
+        black_threshold = 30  # Pixels with brightness below this are considered "black"
+        
+        # Detect horizontal black bars (letterbox)
+        def detect_horizontal_bars():
+            row_means = np.mean(brightness, axis=1)
+            non_black_rows = np.where(row_means > black_threshold)[0]
+            if len(non_black_rows) > 0:
+                top_crop = non_black_rows[0]
+                bottom_crop = non_black_rows[-1] + 1
+                return top_crop, bottom_crop
+            return 0, height
+        
+        # Detect vertical black bars (pillarbox)
+        def detect_vertical_bars():
+            col_means = np.mean(brightness, axis=0)
+            non_black_cols = np.where(col_means > black_threshold)[0]
+            if len(non_black_cols) > 0:
+                left_crop = non_black_cols[0]
+                right_crop = non_black_cols[-1] + 1
+                return left_crop, right_crop
+            return 0, width
+        
+        # Detect and remove black bars
+        top_crop, bottom_crop = detect_horizontal_bars()
+        left_crop, right_crop = detect_vertical_bars()
+        
+        # Apply detected crops
+        if top_crop > 0 or bottom_crop < height or left_crop > 0 or right_crop < width:
+            print(f"[DEBUG] Detected black bars - cropping to: left={left_crop}, top={top_crop}, right={right_crop}, bottom={bottom_crop}")
+            img = img.crop((left_crop, top_crop, right_crop, bottom_crop))
+            width, height = img.size
+            print(f"[DEBUG] After black bar removal: {width}x{height}")
+        
+        # If already square after black bar removal, return as-is
+        if width == height:
+            output = io.BytesIO()
+            img.save(output, format='JPEG', quality=90, optimize=True)
+            return output.getvalue()
+        
+        # Calculate crop dimensions for center square from the remaining content
+        size = min(width, height)
+        left = (width - size) // 2
+        top = (height - size) // 2
+        right = left + size
+        bottom = top + size
+        
+        # Crop to square
+        cropped_img = img.crop((left, top, right, bottom))
+        print(f"[DEBUG] Final square crop: {size}x{size}")
+        
+        # Save as JPEG
+        output = io.BytesIO()
+        cropped_img.save(output, format='JPEG', quality=90, optimize=True)
+        return output.getvalue()
+        
+    except ImportError:
+        print("[DEBUG] NumPy not available - falling back to basic center crop")
+        return crop_image_to_square_basic(image_data)
+    except Exception as e:
+        print(f"[DEBUG] Error in smart cropping: {e} - falling back to basic crop")
+        return crop_image_to_square_basic(image_data)
+
+def crop_image_to_square_basic(image_data):
+    """
+    Basic center crop fallback when NumPy is not available.
+    """
+    try:
+        # Open image from bytes
+        img = Image.open(io.BytesIO(image_data))
+        
+        # Get dimensions
+        width, height = img.size
+        print(f"[DEBUG] Basic crop - Original dimensions: {width}x{height}")
+        
+        # If already square, return as-is
+        if width == height:
+            output = io.BytesIO()
+            img.save(output, format='JPEG', quality=90)
+            return output.getvalue()
+        
+        # Calculate crop dimensions for center square
+        size = min(width, height)
+        left = (width - size) // 2
+        top = (height - size) // 2
+        right = left + size
+        bottom = top + size
+        
+        # Crop to square
+        cropped_img = img.crop((left, top, right, bottom))
+        print(f"[DEBUG] Basic cropped to square: {size}x{size}")
+        
+        # Convert to RGB if needed (removes alpha channel)
+        if cropped_img.mode in ('RGBA', 'LA'):
+            background = Image.new('RGB', cropped_img.size, (255, 255, 255))
+            background.paste(cropped_img, mask=cropped_img.split()[-1] if cropped_img.mode == 'RGBA' else None)
+            cropped_img = background
+        
+        # Save as JPEG
+        output = io.BytesIO()
+        cropped_img.save(output, format='JPEG', quality=90, optimize=True)
+        return output.getvalue()
+        
+    except Exception as e:
+        print(f"[DEBUG] Error in basic cropping: {e}")
+        return image_data  # Return original if cropping fails
+
+def get_youtube_audio_url(video_id):
+    """Extract audio stream URL from YouTube video using yt-dlp."""
+    try:
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            'extractaudio': True,
+            'audioformat': 'mp3',
+            'outtmpl': '%(id)s.%(ext)s',
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+            
+            # Look for the best audio stream
+            formats = info.get('formats', [])
+            audio_formats = [f for f in formats if f.get('acodec', 'none') != 'none' and f.get('vcodec', 'none') == 'none']
+            
+            if audio_formats:
+                # Sort by audio quality (higher abr is better)
+                audio_formats.sort(key=lambda x: x.get('abr', 0), reverse=True)
+                best_audio = audio_formats[0]
+                return best_audio.get('url')
+            
+            # Fallback to best format with audio
+            if formats:
+                best_format = formats[0]
+                return best_format.get('url')
+                
+    except Exception as e:
+        print(f"[DEBUG] Error extracting audio URL for {video_id}: {e}")
+        return None
+
+def stream_remote_range(url):
+    """Stream remote content while supporting Range requests from the client.
+    This function proxies the upstream URL and yields chunks.
+    """
+    print(f"[DEBUG] stream_remote_range called with URL: {url}")
+    # Determine client's range header
+    range_header = request.headers.get('Range')
+    headers = {}
+    if range_header:
+        headers['Range'] = range_header
+        print(f"[DEBUG] Client sent Range header: {range_header}")
+
+    # Stream from upstream
+    print(f"[DEBUG] Making request to upstream URL...")
+    upstream = requests.get(url, headers=headers, stream=True, timeout=15)
+    print(f"[DEBUG] Upstream response status: {upstream.status_code}")
+    print(f"[DEBUG] Upstream response headers: {dict(upstream.headers)}")
+
+    # Build response headers
+    upstream_headers = {}
+    for h in ['Content-Type', 'Content-Length', 'Accept-Ranges', 'Content-Range']:
+        if h in upstream.headers:
+            upstream_headers[h] = upstream.headers[h]
+
+    def generate():
+        try:
+            for chunk in upstream.iter_content(chunk_size=8192):
+                if chunk:
+                    yield chunk
+        finally:
+            try:
+                upstream.close()
+            except:
+                pass
+
+    return generate(), upstream.status_code, upstream_headers
+
+
+@app.route('/search_ytmusic')
+def search_ytmusic():
+    """Search via YouTube Music API. Returns metadata and a proxy id for streaming.
+
+    Query params: q (search term)
+    """
+    print(f"[DEBUG] USE_MOCK_API: {USE_MOCK_API}")
+    
+    q = request.args.get('q')
+    if not q:
+        return jsonify({'success': False, 'error': 'q parameter required'}), 400
+
+    # Mock API for testing when no real API is available
+    if USE_MOCK_API:
+        # Return mock data for testing - multiple results
+        search_limit = 5 # Hardcoded to 5 results
+        mock_results = []
+        
+        for i in range(min(search_limit, 3)):  # Generate up to 3 mock results
+            mock_data = {
+                'title': f'Mock Song {i+1} - {q}',
+                'artist': f'Mock Artist {i+1}',
+                'image': 'https://via.placeholder.com/300x300.png?text=Mock+Cover',
+                'download': 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',  # Free test MP3
+                'duration': 180 + i * 30,  # Different durations
+                'album': f'Mock Album {i+1}' if i > 0 else ''
+            }
+            
+            proxy_id = add_proxy_url(mock_data['download'])
+            mock_results.append({
+                'proxy_id': proxy_id,
+                'metadata': {
+                    'title': mock_data['title'],
+                    'artist': mock_data['artist'],
+                    'image': mock_data['image'],
+                    'duration': mock_data['duration'],
+                    'album': mock_data['album']
+                },
+                'video_id': f'mock_video_{i+1}',
+                'expires_in': PROXY_TTL
+            })
+        
+        return jsonify({
+            'success': True,
+            'results': mock_results,
+            'total': len(mock_results),
+            'note': 'Using mock data for testing'
+        })
+
+    # Real YouTube Music API code
+    try:
+        if not ytmusic:
+            return jsonify({'success': False, 'error': 'YouTube Music API not available'}), 500
+
+        # Search for songs - get multiple results
+        search_limit = 5  # Hardcoded to 5 results
+        search_results = ytmusic.search(q, filter='songs', limit=search_limit)
+        
+        if not search_results:
+            return jsonify({'success': False, 'error': 'No results found'}), 404
+        
+        # Process up to 5 results
+        processed_results = []
+        for song in search_results[:5]:
+            video_id = song.get('videoId')
+            
+            if not video_id:
+                continue  # Skip results without video ID
+            
+            # Extract audio stream URL
+            audio_url = get_youtube_audio_url(video_id)
+            
+            if not audio_url:
+                continue  # Skip if can't get audio URL
+            
+            # Extract metadata
+            artists = song.get('artists', [])
+            if isinstance(artists, list) and artists:
+                artist_str = ', '.join([artist.get('name', 'Unknown') for artist in artists])
+            else:
+                artist_str = 'Unknown Artist'
+            
+            # Get thumbnail - use the specific format with video_id for high quality
+            thumbnails = song.get('thumbnails', [])
+            image_url = ''
+            if video_id:
+                # Use the specific YouTube thumbnail format you requested
+                image_url = enhance_youtube_thumbnail_quality(None, video_id)
+                print(f"[DEBUG] Using high-quality thumbnail URL: {image_url}")
+            elif thumbnails:
+                # Fallback to thumbnails from API and enhance them
+                sorted_thumbnails = sorted(thumbnails, key=lambda x: (x.get('width', 0) * x.get('height', 0)), reverse=True)
+                if sorted_thumbnails:
+                    best_thumbnail = sorted_thumbnails[0]
+                    raw_url = best_thumbnail.get('url', '')
+                    print(f"[DEBUG] Selected thumbnail: {best_thumbnail.get('width', 'unknown')}x{best_thumbnail.get('height', 'unknown')} - {raw_url}")
+                    image_url = enhance_youtube_thumbnail_quality(raw_url)
+                else:
+                    raw_url = thumbnails[-1].get('url', '')
+                    image_url = enhance_youtube_thumbnail_quality(raw_url)
+            
+            metadata = {
+                'title': song.get('title', 'Unknown Title'),
+                'artist': artist_str,
+                'image': image_url,
+                'duration': song.get('duration_seconds'),
+                'album': song.get('album', {}).get('name', '') if song.get('album') else ''
+            }
+            
+            # Create proxy id for the audio URL
+            proxy_id = add_proxy_url(audio_url)
+            
+            processed_results.append({
+                'proxy_id': proxy_id,
+                'metadata': metadata,
+                'video_id': video_id,
+                'expires_in': PROXY_TTL
+            })
+        
+        if not processed_results:
+            return jsonify({'success': False, 'error': 'No valid results found'}), 404
+        
+        return jsonify({
+            'success': True,
+            'results': processed_results,
+            'total': len(processed_results)
+        })
+
+    except Exception as e:
+        print(f"Error querying YouTube Music API: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/stream_proxy/<proxy_id>')
+def stream_proxy(proxy_id):
+    """Stream the proxied URL associated with proxy_id. Supports Range proxying."""
+    print(f"[DEBUG] stream_proxy called with proxy_id: {proxy_id}")
+    url = get_proxy_url(proxy_id)
+    print(f"[DEBUG] get_proxy_url returned: {url}")
+    if not url:
+        print(f"[DEBUG] No URL found for proxy_id: {proxy_id}")
+        return jsonify({'success': False, 'error': 'Invalid or expired proxy id'}), 404
+
+    try:
+        print(f"[DEBUG] Attempting to stream URL: {url}")
+        gen, status, headers = stream_remote_range(url)
+        print(f"[DEBUG] stream_remote_range returned status: {status}")
+        # Return a streamed response
+        from flask import Response
+        return Response(gen, status=status, headers=headers)
+    except Exception as e:
+        print(f"Error streaming proxy url: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/add_to_queue', methods=['POST'])
+def add_to_queue():
+    """Download and save a searched song to make it permanent like uploaded files."""
+    data = request.get_json()
+    room = data.get('room')
+    proxy_id = data.get('proxy_id')
+    metadata = data.get('metadata', {})
+    video_id = data.get('video_id')  # Add video_id for yt-dlp downloads
+    
+    if not room or room not in rooms_data:
+        return jsonify({'success': False, 'error': 'Invalid or expired room'}), 400
+    
+    if not proxy_id:
+        return jsonify({'success': False, 'error': 'Proxy ID required'}), 400
+    
+    # Get the streaming URL
+    url = get_proxy_url(proxy_id)
+    if not url:
+        return jsonify({'success': False, 'error': 'Invalid or expired proxy ID'}), 400
+    
+    try:
+        # Create filename for saving - handle None values properly
+        title = metadata.get('title') or 'Unknown Title'
+        artist = metadata.get('artist') or 'Unknown Artist'
+        
+        # Clean up title and artist for filename
+        title = str(title).replace('/', '_').replace('\\', '_').replace('|', '_').strip()
+        artist = str(artist).replace('/', '_').replace('\\', '_').replace('|', '_').strip()
+        
+        # Fallback if still empty
+        if not title or title == 'None':
+            title = 'Unknown Title'
+        if not artist or artist == 'None':
+            artist = 'Unknown Artist'
+            
+        # Create base filename without extension (yt-dlp will add the appropriate extension)
+        base_filename = f"{artist} - {title}"
+        base_filepath = os.path.join(UPLOAD_FOLDER, base_filename)
+        
+        print(f"[Room {room}] - Creating base filename: {base_filename}")
+        print(f"[Room {room}] - Metadata received: title='{metadata.get('title')}', artist='{metadata.get('artist')}'")
+        
+        # Check if file already exists (check all supported formats)
+        existing_file = None
+        for ext in ALLOWED_EXTENSIONS:
+            test_path = f"{base_filepath}.{ext}"
+            if os.path.exists(test_path):
+                existing_file = f"{base_filename}.{ext}"
+                break
+        
+        actual_filename = existing_file
+        
+        if existing_file:
+            print(f"[Room {room}] - File already exists: {existing_file}")
+        else:
+            # Try different download methods for best speed
+            print(f"[Room {room}] - Downloading: {base_filename}")
+            download_success = False
+            
+            # Method 1: Try yt-dlp direct download if video_id is available (PRIORITY)
+            if video_id:
+                print(f"[Room {room}] - Using yt-dlp with video_id: {video_id}")
+                result = download_with_ytdlp(video_id, f"{base_filepath}.tmp", room)
+                if result:
+                    actual_filename = result
+                    download_success = True
+                    print(f"[Room {room}] - yt-dlp download completed successfully! File: {actual_filename}")
+                else:
+                    print(f"[Room {room}] - yt-dlp download failed, trying fallback methods")
+            else:
+                print(f"[Room {room}] - No video_id provided, skipping yt-dlp direct download")
+            
+            # Method 2: Try parallel download with range requests (only if yt-dlp failed)
+            if not download_success:
+                # For fallback methods, use .m4a as default
+                fallback_filename = f"{base_filename}.m4a"
+                fallback_filepath = os.path.join(UPLOAD_FOLDER, fallback_filename)
+                
+                print(f"[Room {room}] - Attempting parallel range request download")
+                download_success = download_with_range_requests(url, fallback_filepath, room)
+                if download_success:
+                    actual_filename = fallback_filename
+                    print(f"[Room {room}] - Parallel download completed successfully!")
+            
+            # Method 3: Fallback to regular download (only if both above failed)
+            if not download_success:
+                # For regular download, use .m4a as default
+                fallback_filename = f"{base_filename}.m4a"
+                fallback_filepath = os.path.join(UPLOAD_FOLDER, fallback_filename)
+                
+                print(f"[Room {room}] - Falling back to regular stream download")
+                response = download_session.get(url, stream=True, timeout=120)
+                response.raise_for_status()
+                
+                # Use even larger chunk size for better speed
+                total_size = 0
+                start_time = time.time()
+                with open(fallback_filepath, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=262144):  # 256KB chunks
+                        if chunk:
+                            f.write(chunk)
+                            total_size += len(chunk)
+                
+                end_time = time.time()
+                download_time = end_time - start_time
+                speed_mbps = (total_size / 1024 / 1024) / download_time if download_time > 0 else 0
+                print(f"[Room {room}] - Regular download completed: {fallback_filename} ({total_size/1024/1024:.2f}MB in {download_time:.2f}s, {speed_mbps:.2f}MB/s)")
+                actual_filename = fallback_filename
+                download_success = True
+        
+        # Use the actual downloaded filename
+        final_filepath = os.path.join(UPLOAD_FOLDER, actual_filename) if actual_filename else None
+        
+        # Download cover art from URL if available (parallel with metadata extraction)
+        cover_filename = None
+        image_url = metadata.get('image')
+        if image_url:
+            try:
+                # Use the enhanced image URL (already uses hqdefault format)
+                cover_filename = f"{base_filename}_cover.jpg"
+                cover_path = os.path.join(UPLOAD_FOLDER, cover_filename)
+                
+                print(f"[Room {room}] - Downloading cover art from: {image_url}")
+                
+                # Download cover art with optimized settings
+                cover_response = download_session.get(image_url, timeout=30, stream=True)
+                cover_response.raise_for_status()
+                
+                # Read the image data
+                image_data = b''
+                for chunk in cover_response.iter_content(chunk_size=32768):  # 32KB chunks
+                    if chunk:
+                        image_data += chunk
+                
+                # Crop the image to square 1:1 ratio
+                print(f"[Room {room}] - Cropping image to square format")
+                cropped_image_data = crop_image_to_square(image_data)
+                
+                # Save the cropped image
+                with open(cover_path, 'wb') as f:
+                    f.write(cropped_image_data)
+                
+                # Check final image size
+                file_size = os.path.getsize(cover_path)
+                print(f"[Room {room}] - Cover art downloaded and cropped: {cover_filename} ({file_size/1024:.1f}KB)")
+                
+            except Exception as cover_error:
+                print(f"[Room {room}] - Failed to download/crop cover art: {cover_error}")
+                cover_filename = None
+        
+        # Extract metadata and cover art like uploaded files (only if we have a file)
+        audio_metadata = {}
+        if final_filepath and os.path.exists(final_filepath):
+            audio_metadata = extract_metadata(final_filepath)
+        
+        # Fallback to extracting embedded cover art if URL download failed
+        if not cover_filename and final_filepath and os.path.exists(final_filepath):
+            cover_data, cover_ext = extract_cover_art(final_filepath)
+            if cover_data:
+                cover_filename = f"{base_filename}_cover.{cover_ext}"
+                cover_path = os.path.join(UPLOAD_FOLDER, cover_filename)
+                with open(cover_path, 'wb') as f:
+                    f.write(cover_data)
+        
+        # Use thread lock only for queue operations (not download)
+        with thread_lock:
+            # Create audio item for queue (same format as uploaded files)
+            # Use the original metadata if audio_metadata extraction failed
+            final_title = audio_metadata.get('title') or title
+            final_artist = audio_metadata.get('artist') or artist
+            final_album = audio_metadata.get('album') or metadata.get('album', '')
+            
+            audio_item = {
+                'filename': actual_filename,
+                'filename_display': f"{final_title} - {final_artist}",
+                'cover': cover_filename,
+                'upload_time': time.time(),
+                'title': final_title,
+                'artist': final_artist,
+                'album': final_album,
+                'proxy_id': None,  # No proxy ID needed for saved files
+                'is_stream': False,  # This is now a saved file
+                'image_url': None,  # Use local cover instead
+                'video_id': None  # Not needed for saved files
+            }
+            
+            # Initialize queue if it doesn't exist
+            if 'queue' not in rooms_data[room]:
+                rooms_data[room]['queue'] = []
+            if 'current_index' not in rooms_data[room]:
+                rooms_data[room]['current_index'] = -1
+            
+            # Add to queue
+            rooms_data[room]['queue'].append(audio_item)
+            
+            # If no song is currently loaded, set this as current
+            if rooms_data[room]['current_file'] is None:
+                rooms_data[room]['current_index'] = len(rooms_data[room]['queue']) - 1
+                rooms_data[room].update({
+                    'current_file': actual_filename,
+                    'current_file_display': audio_item['filename_display'],
+                    'current_cover': audio_item['cover'],
+                    'current_title': audio_item['title'],
+                    'current_artist': audio_item['artist'],
+                    'current_album': audio_item['album'],
+                    'is_playing': False,
+                    'last_progress_s': 0,
+                    'last_updated_at': time.time(),
+                    'current_proxy_id': None,
+                    'current_is_stream': False,
+                    'current_image_url': None
+                })
+                
+                # Send data to client for the new current song
+                emit_data = {
+                    'filename': actual_filename, 
+                    'filename_display': audio_item['filename_display'],
+                    'cover': audio_item['cover'],
+                    'title': audio_item['title'],
+                    'artist': audio_item['artist'],
+                    'album': audio_item['album'],
+                    'proxy_id': None,
+                    'is_stream': False,
+                    'image_url': None
+                }
+                socketio.emit('new_file', emit_data, to=room)
+                socketio.emit('pause', {'time': 0}, to=room)
+            
+            # Always emit queue update
+            socketio.emit('queue_update', {
+                'queue': rooms_data[room]['queue'],
+                'current_index': rooms_data[room]['current_index']
+            }, to=room)
+        
+        return jsonify({
+            'success': True, 
+            'message': 'Song downloaded and added to queue',
+            'display_name': audio_item['filename_display'],
+            'filename': actual_filename
+        })
+
+    except Exception as e:
+        print(f"ERROR downloading and adding song to queue for room '{room}': {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Failed to download and add to queue: {str(e)}'
+        }), 500
 
 
 @app.route('/upload', methods=['POST'])
@@ -705,12 +1709,19 @@ def player_room(room_id):
 
 @socketio.on('join')
 def on_join(data):
-    print(f"--- JOIN EVENT: Client {request.sid} is attempting to join room {data.get('room')} ---")
+    # Get session ID using the emit context 
+    try:
+        from flask import has_request_context, g
+        session_id = getattr(g, 'sid', str(uuid.uuid4()))
+    except:
+        session_id = str(uuid.uuid4())
+    
+    print(f"--- JOIN EVENT: Client {session_id} is attempting to join room {data.get('room')} ---")
     room = data['room']
     if room in rooms_data:
         join_room(room)
-        print(f"--- JOIN SUCCESS: Client {request.sid} successfully joined room {room} ---")
-        print(f"Client {request.sid} joined room: {room}")
+        print(f"--- JOIN SUCCESS: Client {session_id} successfully joined room {room} ---")
+        print(f"Client {session_id} joined room: {room}")
         with thread_lock:
             # Update member count and list
             if 'members' not in rooms_data[room]:
@@ -723,7 +1734,7 @@ def on_join(data):
             # Check if this is the first member (becomes host)
             is_host = len(rooms_data[room]['member_list']) == 0
             if is_host:
-                rooms_data[room]['host_id'] = request.sid
+                rooms_data[room]['host_id'] = session_id
             
             # Add member to the list
             device_info = data.get('deviceInfo', {})
@@ -1193,4 +2204,4 @@ socketio.start_background_task(target=sync_rooms_periodically)
 
 if __name__ == '__main__':
     # This block runs for local development
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+    socketio.run(app, host='0.0.0.0', port=5001, debug=True, use_reloader=False)
