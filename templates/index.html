@@ -37,15 +37,23 @@
     <div class="container">
         <header class="main-header">
             <h1 class="main-heading">AudioFlow</h1>
-            <div class="room-header-controls">
             <div class="room-header-controls" style="display: flex; align-items: center; justify-content: center; gap: 10px;">
                 <span class="member-count"><i class="fa-solid fa-user-group"></i> {{ member_count if member_count is defined else 1 }}</span>
                 <div class="room-code-display">Room code: <span>{{ room_id }}</span></div>
                 <a href="{{ url_for('create_room') }}" class="create-new-room-button" title="Create New Room" style="margin-left: 10px;">+</a>
                 <a href="/" class="exit-room-button" title="Exit Room" style="margin-left: 5px;"><i class="fas fa-sign-out-alt"></i></a>
             </div>
-        </div>
         </header>
+
+        <!-- Search Section -->
+        <div class="search-section">
+            <form id="search-form" style="display:flex;align-items:center;justify-content:center;gap:8px;max-width:400px;margin:0 auto;" onsubmit="event.preventDefault(); return false;">
+                <input id="search-input" type="text" placeholder="Search for music..." value="" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="flex:1;padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.1);color:inherit;backdrop-filter:blur(10px);" />
+                <button id="search-btn" type="button" class="control-button" title="Search" style="padding:8px 12px;">
+                    <i class="fas fa-search"></i>
+                </button>
+            </form>
+        </div>
 
         <div class="cover-section">
             <div class="cover-dancing-bars left">
@@ -194,16 +202,17 @@
                 <input type="file" id="audio-input" accept=".mp3,.wav,.ogg,.flac,.m4a" style="display: none;">
             </div>
 
-        <div class="sync-wrapper">
-            <button id="sync-btn" class="control-button">
-                <i class="fas fa-sync-alt"></i>Sync
-            </button>
-            <button id="queue-btn" class="control-button">
-                <i class="fas fa-list"></i>Queue (<span id="queue-count">0</span>)
-            </button>
-            <button id="lyrics-btn" class="control-button">
-                <i class="fas fa-music"></i>Lyrics
-            </button>
+            <div class="sync-wrapper">
+                <button id="sync-btn" class="control-button">
+                    <i class="fas fa-sync-alt"></i>Sync
+                </button>
+                <button id="queue-btn" class="control-button">
+                    <i class="fas fa-list"></i>Queue (<span id="queue-count">0</span>)
+                </button>
+                <button id="lyrics-btn" class="control-button">
+                    <i class="fas fa-music"></i>Lyrics
+                </button>
+            </div>
         </div>
 
         <!-- Fullscreen Toggle Button (hidden by default, shown when audio is loaded) -->
@@ -254,6 +263,21 @@
                 <div class="members-modal-body">
                     <div id="members-list" class="members-list">
                         <p class="loading-members">Loading members...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Search Results Modal -->
+        <div id="search-modal" class="queue-modal" style="display:none;">
+            <div class="queue-modal-content" style="max-width:720px;">
+                <div class="queue-modal-header">
+                    <h3>Search Results</h3>
+                    <button id="close-search" class="close-queue-btn">&times;</button>
+                </div>
+                <div class="queue-modal-body">
+                    <div id="search-results" style="display:flex;flex-direction:column;gap:10px;">
+                        <p class="empty-queue">No results yet</p>
                     </div>
                 </div>
             </div>
