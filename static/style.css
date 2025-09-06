@@ -213,6 +213,11 @@ body.fullscreen-mode {
     position: relative;
 }
 
+/* Hide search section in fullscreen mode */
+body.fullscreen-mode .search-section {
+    display: none !important;
+}
+
 /* Fullscreen Color Transition Slide Overlay */
 .fullscreen-color-slide-overlay {
     position: fixed;
