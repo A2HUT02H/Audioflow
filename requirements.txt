@@ -7,3 +7,8 @@ eventlet
 uuid
 redis
 syncedlyrics
+python-dotenv==1.0.0
+ytmusicapi
+yt-dlp
+Pillow
+numpy
