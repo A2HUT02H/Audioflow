@@ -848,8 +848,102 @@ document.addEventListener('DOMContentLoaded', () => {
         player.addEventListener('volumechange', () => {
             updateVolumeDisplay();
         });
+
+        // Add error handler for stream URL refresh
+        player.addEventListener('error', async (e) => {
+            console.log('[DEBUG] Player error occurred:', e);
+            console.log('[DEBUG] Player error code:', player.error?.code);
+            console.log('[DEBUG] Player error message:', player.error?.message);
+            
+            // Check if this is a streamed song with proxy ID
+            if (player.currentProxyId && player.currentFilename && player.currentFilename.startsWith('stream_')) {
+                console.log('[DEBUG] Stream error detected, attempting to refresh URL...');
+                
+                try {
+                    // Try to find the video_id from current queue data
+                    const videoId = await findVideoIdForStream(player.currentFilename);
+                    if (videoId) {
+                        console.log('[DEBUG] Found video ID:', videoId, 'attempting refresh...');
+                        
+                        const response = await fetch('/refresh_stream_url', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                video_id: videoId
+                            })
+                        });
+                        
+                        const result = await response.json();
+                        if (result.success) {
+                            console.log('[DEBUG] Successfully refreshed URL, new proxy ID:', result.proxy_id);
+                            
+                            // Update the player source with new proxy ID
+                            player.currentProxyId = result.proxy_id;
+                            player.src = `/stream_proxy/${result.proxy_id}`;
+                            player.load();
+                            
+                            // Update queue data with new proxy ID
+                            await updateQueueProxyId(player.currentFilename, result.proxy_id);
+                            
+                            console.log('[DEBUG] Stream URL refreshed successfully');
+                        } else {
+                            console.error('[ERROR] Failed to refresh stream URL:', result.error);
+                        }
+                    } else {
+                        console.error('[ERROR] Could not find video ID for stream refresh');
+                    }
+                } catch (err) {
+                    console.error('[ERROR] Error refreshing stream URL:', err);
+                }
+            }
+        });
         
         console.log('[SUCCESS] Custom player initialization completed successfully!');
+    }
+
+    // Helper function to find video_id for a stream filename from queue data
+    async function findVideoIdForStream(streamFilename) {
+        try {
+            // Check if we have current queue data in memory
+            if (window.currentQueueData && window.currentQueueData.queue) {
+                const item = window.currentQueueData.queue.find(q => q.filename === streamFilename);
+                if (item && item.video_id) {
+                    return item.video_id;
+                }
+            }
+            
+            console.log('[DEBUG] Video ID not found in queue data for:', streamFilename);
+            return null;
+        } catch (err) {
+            console.error('[ERROR] Error finding video ID:', err);
+            return null;
+        }
+    }
+
+    // Helper function to update proxy ID in queue data
+    async function updateQueueProxyId(streamFilename, newProxyId) {
+        try {
+            // Update in-memory queue data
+            if (window.currentQueueData && window.currentQueueData.queue) {
+                const item = window.currentQueueData.queue.find(q => q.filename === streamFilename);
+                if (item) {
+                    item.proxy_id = newProxyId;
+                    console.log('[DEBUG] Updated queue item proxy_id for:', streamFilename);
+                    
+                    // Emit queue update to keep other clients in sync
+                    if (socket && socket.connected) {
+                        socket.emit('queue_update', {
+                            queue: window.currentQueueData.queue,
+                            current_index: window.currentQueueData.current_index
+                        });
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('[ERROR] Error updating queue proxy ID:', err);
+        }
     }
 
     // Initialize the custom player with a slight delay to ensure DOM is fully ready
@@ -1151,12 +1245,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (memberCount) {
         memberCount.addEventListener('click', () => {
             console.log('Member count button clicked!');
-			 // Disable member modal in fullscreen mode
+            
+            // Disable member modal in fullscreen mode
             if (document.body.classList.contains('fullscreen-mode')) {
                 console.log('Member modal disabled in fullscreen mode');
                 return;
             }
-			
+            
             if (membersModal) {
                 console.log('Opening members modal');
                 membersModal.style.display = 'flex';
@@ -1496,7 +1591,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // Use display filename if available, otherwise fallback to filename
         const displayFilename = data.filename_display || data.filename;
         console.log('[DEBUG] Final display filename for loadAudio:', JSON.stringify(displayFilename));
-        loadAudio(data.filename, data.cover, displayFilename, data.title, data.artist);
+        
+        // Check if this is a streamed song
+        const isStreamedSong = data.is_stream || data.proxy_id;
+        loadAudio(data.filename, data.cover, displayFilename, data.title, data.artist, data.proxy_id, data.image_url);
         
         // Ensure fullscreen contrast after song change
         if (document.body.classList.contains('fullscreen-mode')) {
@@ -1606,6 +1704,16 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('[DEBUG] Received queue_update:', data);
         console.log('[DEBUG] Previous queue length:', currentQueue.length, 'New queue length:', data.queue ? data.queue.length : 0);
         console.log('[DEBUG] Is uploading:', fileNameDisplay.classList.contains('uploading'));
+        
+        // Store queue data globally for URL refresh functionality
+        window.currentQueueData = {
+            queue: data.queue || [],
+            current_index: typeof data.current_index === 'number' ? data.current_index : parseInt(data.current_index, 10)
+        };
+        if (isNaN(window.currentQueueData.current_index)) {
+            window.currentQueueData.current_index = -1;
+        }
+        
         const prevQueueLength = currentQueue.length;
         lastQueueIndex = currentQueueIndex;
         currentQueue = data.queue || [];
@@ -1816,7 +1924,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     
-    function loadAudio(filename, cover, displayFilename = null, title = null, artist = null) {
+    function loadAudio(filename, cover, displayFilename = null, title = null, artist = null, proxyId = null, imageUrl = null) {
         console.log('[DEBUG] loadAudio called with filename:', JSON.stringify(filename));
         console.log('[DEBUG] loadAudio called with displayFilename:', JSON.stringify(displayFilename));
         console.log('[DEBUG] loadAudio called with title:', JSON.stringify(title));
@@ -1897,7 +2005,33 @@ document.addEventListener('DOMContentLoaded', () => {
         if (songTitleElement) songTitleElement.removeAttribute('data-fixed-color');
         if (songArtistElement) songArtistElement.removeAttribute('data-fixed-color');
         
-        player.src = `/uploads/${encodeURIComponent(filename)}`;
+        // Set player source based on whether it's a streamed song or uploaded file
+        if (proxyId) {
+            // Streamed song - use proxy endpoint
+            player.src = `/stream_proxy/${proxyId}`;
+            console.log('[DEBUG] Loading streamed audio with proxy ID:', proxyId);
+            
+            // Store current stream info for potential refresh
+            player.currentProxyId = proxyId;
+            player.currentFilename = filename;
+            player.currentDisplayFilename = displayFilename;
+            player.currentTitle = title;
+            player.currentArtist = artist;
+            player.currentImageUrl = imageUrl;
+        } else {
+            // Uploaded file - use uploads endpoint
+            player.src = `/uploads/${encodeURIComponent(filename)}`;
+            console.log('[DEBUG] Loading uploaded audio file:', filename);
+            
+            // Clear stream info for uploaded files
+            delete player.currentProxyId;
+            delete player.currentFilename;
+            delete player.currentDisplayFilename;
+            delete player.currentTitle;
+            delete player.currentArtist;
+            delete player.currentImageUrl;
+        }
+        
         player.load();
         fileNameDisplay.classList.remove('playing');
         coverArt.style.boxShadow = 'none';
@@ -1974,24 +2108,93 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             };
         } else {
-            // No cover art available, show placeholder
-            coverArt.src = '';
-            coverArt.style.display = 'none';
-            if (coverArtPlaceholder) {
-                coverArtPlaceholder.style.display = 'block';
-                coverArtPlaceholder.classList.add('visible');
-                // Setup 3D tilt effect for placeholder
-                setup3DTiltEffect(coverArtPlaceholder);
-            }
-            currentDominantColor = null;
-            currentColorPalette = null;
-            resetTheme();
-            updateCoverPositionVars();
-            
-            // Trigger slide-in animation if this is from a song change
-            if (lastChangeDirection) {
-                triggerSlideInAnimation(lastChangeDirection);
-                lastChangeDirection = null; // Reset after use
+            // Check if we have a remote image URL for streamed songs
+            if (imageUrl) {
+                // Hide placeholder and show remote cover art
+                if (coverArtPlaceholder) {
+                    coverArtPlaceholder.classList.remove('visible');
+                    coverArtPlaceholder.style.display = 'none';
+                }
+                
+                // Remote streamed song cover
+                coverArt.src = imageUrl;
+                coverArt.style.display = 'block';
+                coverArt.onload = () => {
+                    try {
+                        const dominantColor = colorThief.getColor(coverArt);
+                        const palette = colorThief.getPalette(coverArt, 3); // Get top 3 colors
+                        currentDominantColor = dominantColor;
+                        currentColorPalette = palette;
+                        const [r, g, b] = dominantColor;
+                        coverArt.style.boxShadow = `0 0 15px rgba(${r},${g},${b},0.6), 0 0 35px rgba(${r},${g},${b},0.4)`;
+                        applyTheme(dominantColor, palette);
+                        updateCoverPositionVars();
+                        
+                        // Ensure text contrast in fullscreen mode
+                        setTimeout(() => {
+                            ensureFullscreenContrast();
+                        }, 100);
+                        
+                        // Setup 3D tilt effect for cover art
+                        setup3DTiltEffect(coverArt);
+                        
+                        // Trigger slide-in animation if this is from a song change
+                        if (lastChangeDirection) {
+                            triggerSlideInAnimation(lastChangeDirection);
+                            lastChangeDirection = null; // Reset after use
+                        }
+                    } catch (e) {
+                        console.error('Failed to extract color from remote cover:', e);
+                        resetTheme();
+                        // Still setup tilt effect even if color extraction fails
+                        setup3DTiltEffect(coverArt);
+                        
+                        // Trigger slide-in animation if this is from a song change
+                        if (lastChangeDirection) {
+                            triggerSlideInAnimation(lastChangeDirection);
+                            lastChangeDirection = null; // Reset after use
+                        }
+                    }
+                };
+                coverArt.onerror = () => {
+                    console.warn('Remote cover art failed to load, showing placeholder');
+                    // Show placeholder when remote image fails
+                    coverArt.style.display = 'none';
+                    if (coverArtPlaceholder) {
+                        coverArtPlaceholder.style.display = 'block';
+                        coverArtPlaceholder.classList.add('visible');
+                        // Setup 3D tilt effect for placeholder
+                        setup3DTiltEffect(coverArtPlaceholder);
+                    }
+                    resetTheme();
+                    updateCoverPositionVars();
+                    
+                    // Trigger slide-in animation if this is from a song change
+                    if (lastChangeDirection) {
+                        triggerSlideInAnimation(lastChangeDirection);
+                        lastChangeDirection = null; // Reset after use
+                    }
+                };
+            } else {
+                // No cover art available, show placeholder
+                coverArt.src = '';
+                coverArt.style.display = 'none';
+                if (coverArtPlaceholder) {
+                    coverArtPlaceholder.style.display = 'block';
+                    coverArtPlaceholder.classList.add('visible');
+                    // Setup 3D tilt effect for placeholder
+                    setup3DTiltEffect(coverArtPlaceholder);
+                }
+                currentDominantColor = null;
+                currentColorPalette = null;
+                resetTheme();
+                updateCoverPositionVars();
+                
+                // Trigger slide-in animation if this is from a song change
+                if (lastChangeDirection) {
+                    triggerSlideInAnimation(lastChangeDirection);
+                    lastChangeDirection = null; // Reset after use
+                }
             }
         }
     }
@@ -2749,10 +2952,24 @@ document.addEventListener('DOMContentLoaded', () => {
         // Render queue items with draggable attributes for reordering
         const queueHTML = currentQueue.map((item, index) => {
             const isCurrentSong = Number(index) === Number(currentQueueIndex);
-            const coverSrc = item.cover ? `/uploads/${item.cover}` : '';
-            const coverDisplay = item.cover 
-                ? `<img src="${coverSrc}" alt="Cover" class="queue-item-cover">` 
+            
+            // Handle cover images for both local files and remote URLs
+            let coverSrc = '';
+            if (item.cover) {
+                // Local uploaded file cover
+                coverSrc = `/uploads/${item.cover}`;
+            } else if (item.image_url) {
+                // Remote streamed song cover
+                coverSrc = item.image_url;
+            }
+            
+            const coverDisplay = coverSrc 
+                ? `<img src="${coverSrc}" alt="Cover" class="queue-item-cover" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                   <div class="queue-item-cover" style="display:none;">🎵</div>` 
                 : '<div class="queue-item-cover">🎵</div>';
+            
+            // Show stream indicator for streamed songs
+            const streamIndicator = item.is_stream ? '<span class="stream-indicator" title="Streamed from YouTube Music">🌐</span>' : '';
             
             // Only make items draggable if there's more than one song in the queue
             const isDraggable = currentQueue.length > 1;
@@ -2761,7 +2978,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="queue-item ${isCurrentSong ? 'current' : ''}" data-index="${index}" ${isDraggable ? 'draggable="true"' : ''}>
                     ${coverDisplay}
                     <div class="queue-item-info">
-                        <div class="queue-item-title">${item.filename_display || item.filename}</div>
+                        <div class="queue-item-title">${item.filename_display || item.filename} ${streamIndicator}</div>
                         <div class="queue-item-status">${isCurrentSong ? 'Now Playing' : `#${index + 1} in queue`}</div>
                     </div>
                     <div class="queue-item-actions">
@@ -4270,6 +4487,173 @@ document.addEventListener('fullscreenchange', () => {
         // Optionally show a notification about the host change
         // You could add a toast notification here if desired
     });
+
+    // ===============================
+    // Search Functionality
+    // ===============================
+    const searchInput = document.getElementById('search-input');
+    const searchBtn = document.getElementById('search-btn');
+    const searchModal = document.getElementById('search-modal');
+    const searchResults = document.getElementById('search-results');
+    const closeSearch = document.getElementById('close-search');
+
+    if (searchInput && searchBtn && searchModal && searchResults) {
+        // --- Comprehensive Search Safeguards ---
+        console.log('[DEBUG] Initializing search with comprehensive safeguards.');
+
+        // 1. State variables to control search execution
+        let lastSearchTime = 0;
+        let searchInProgress = false;
+        let userHasInteracted = false; // Becomes true only on focus/click
+        let pageReady = false;
+
+        // 2. Set input to be completely inert on load
+        searchInput.value = '';
+        searchInput.setAttribute('autocomplete', 'off');
+        searchInput.setAttribute('autocorrect', 'off');
+        searchInput.setAttribute('autocapitalize', 'off');
+        searchInput.setAttribute('spellcheck', 'false');
+        
+        // 3. Set a delay after page load before allowing any search-related activity
+        setTimeout(() => {
+            pageReady = true;
+            console.log('[DEBUG] Page is ready. Search can be enabled by user interaction.');
+        }, 2000); // 2-second "cool-down" period after page load
+
+        function openSearchModal() { searchModal.style.display = 'flex'; }
+        function closeSearchModal() { searchModal.style.display = 'none'; }
+
+        async function doSearch(q) {
+            // --- Multi-layer validation before fetching ---
+            const now = Date.now();
+            if (!pageReady || !userHasInteracted || searchInProgress || (now - lastSearchTime < 1500)) {
+                console.log(`[DEBUG] Search blocked. Conditions: pageReady=${pageReady}, userHasInteracted=${userHasInteracted}, searchInProgress=${searchInProgress}, timeSinceLast=${now - lastSearchTime}`);
+                return;
+            }
+            
+            const trimmedQuery = q.trim();
+            if (trimmedQuery.length === 0) {
+                console.log('[DEBUG] Search skipped: Query is empty.');
+                return;
+            }
+
+            console.log(`[DEBUG] Executing search for: "${trimmedQuery}"`);
+            lastSearchTime = now;
+            searchInProgress = true;
+            searchResults.innerHTML = '<p class="loading-members">Searching...</p>';
+
+            try {
+                const res = await fetch(`/search_ytmusic?q=${encodeURIComponent(trimmedQuery)}&limit=5`);
+                const data = await res.json();
+
+                if (!data.success) {
+                    searchResults.innerHTML = `<p class="no-members">${data.error || 'Search failed'}</p>`;
+                    return;
+                }
+
+                if (data.results && data.results.length > 0) {
+                    let html = '';
+                    data.results.forEach((result, index) => {
+                        const md = result.metadata || {};
+                        const duration = md.duration ? formatDuration(md.duration) : '';
+                        html += `
+                            <div class="search-result-item" style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.1);">
+                                <img src="${md.image || ''}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;display:${md.image ? 'block' : 'none'}" />
+                                <div style="flex:1;min-width:0;">
+                                    <div style="font-weight:600;font-size:0.95rem;margin-bottom:2px;">${md.title || 'Unknown'}</div>
+                                    <div style="color:rgba(255,255,255,0.7);font-size:0.85rem;">${md.artist || 'Unknown'}</div>
+                                </div>
+                                <button class="download-btn control-button" data-index="${index}">Add</button>
+                            </div>`;
+                    });
+                    searchResults.innerHTML = html;
+                    // Add event listeners after rendering results
+                    document.querySelectorAll('.download-btn').forEach(btn => {
+                        btn.addEventListener('click', async (e) => {
+                            const index = parseInt(e.target.getAttribute('data-index'));
+                            const result = data.results[index];
+                            e.target.textContent = 'Adding...';
+                            e.target.disabled = true;
+                            await downloadAndAddToQueue(result);
+                            e.target.textContent = 'Added!';
+                            setTimeout(() => {
+                                e.target.textContent = 'Add';
+                                e.target.disabled = false;
+                            }, 2000);
+                        });
+                    });
+                } else {
+                    searchResults.innerHTML = '<p class="no-members">No results found</p>';
+                }
+            } catch (err) {
+                console.error('Search fetch error:', err);
+                searchResults.innerHTML = '<p class="no-members">An error occurred.</p>';
+            } finally {
+                searchInProgress = false;
+            }
+        }
+
+        async function downloadAndAddToQueue(result) {
+            try {
+                await fetch('/add_to_queue', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        room: roomId,
+                        proxy_id: result.proxy_id,
+                        metadata: result.metadata,
+                        video_id: result.video_id
+                    })
+                });
+            } catch (err) {
+                console.error('Failed to add song to queue:', err);
+            }
+        }
+
+        function formatDuration(seconds) {
+            if (!seconds) return '';
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.round(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        // --- Event Listeners: The only entry points for search ---
+
+        // Enable search ONLY when the user focuses or clicks the input
+        searchInput.addEventListener('focus', () => {
+            if (pageReady) {
+                userHasInteracted = true;
+                console.log('[DEBUG] User interaction confirmed. Search is now enabled.');
+            }
+        });
+
+        // Handle search button click
+        searchBtn.addEventListener('click', () => {
+            openSearchModal();
+            doSearch(searchInput.value);
+            searchInput.value = ''; // Clear input after search
+        });
+
+        // Handle 'Enter' key in search input
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault(); // Prevent any default form submission
+                openSearchModal();
+                doSearch(searchInput.value);
+                searchInput.value = ''; // Clear input after search
+            }
+        });
+
+        // Block any form submission events directly
+        if (searchInput.form) {
+            searchInput.form.addEventListener('submit', (e) => {
+                e.preventDefault();
+                console.log('[DEBUG] Form submission explicitly blocked.');
+            });
+        }
+        
+        if (closeSearch) closeSearch.addEventListener('click', closeSearchModal);
+    }
 });
 
 // Global lyrics cache management functions (accessible from console)
@@ -4395,4 +4779,3 @@ function getCssColorBrightness(str) {
     if (!rgb) return 255;
     return (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000;
 }
-
