@@ -312,7 +312,7 @@ else:
     # Local development
     UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 
-ALLOWED_EXTENSIONS = {'mp3', 'wav', 'ogg', 'flac', 'm4a'}
+ALLOWED_EXTENSIONS = {'mp3', 'wav', 'ogg', 'flac', 'm4a', 'webm', 'opus', 'aac'}
 
 app = Flask(__name__, static_url_path='/static')
 app.config['SECRET_KEY'] = 'secret!'
@@ -1281,9 +1281,16 @@ def upload():
         file.save(file_path)
         print(f"[Room {room}] - File saved: {filename}")
 
-        # Extract metadata
+        # Prefer client-provided metadata if present, else extract from file
+        client_title = request.form.get('title')
+        client_artist = request.form.get('artist')
+        client_album = request.form.get('album')
+        client_image_url = request.form.get('image_url')
+        client_video_id = request.form.get('video_id')
+
+        # Extract metadata from file as fallback
         metadata = extract_metadata(file_path)
-        print(f"[Room {room} - Metadata extracted: {metadata}")
+        print(f"[Room {room}] - Metadata extracted: {metadata}")
 
         final_cover_filename = None
         # Extract cover art
@@ -1306,9 +1313,13 @@ def upload():
                 'filename_display': original_filename,
                 'cover': final_cover_filename,
                 'upload_time': time.time(),
-                'title': metadata.get('title'),
-                'artist': metadata.get('artist'),
-                'album': metadata.get('album')
+                'title': client_title or metadata.get('title'),
+                'artist': client_artist or metadata.get('artist'),
+                'album': client_album or metadata.get('album'),
+                # align with stream fields for UI consistency
+                'is_stream': False,
+                'image_url': client_image_url,
+                'video_id': client_video_id
             }
             
             # Initialize queue if it doesn't exist
@@ -1327,12 +1338,14 @@ def upload():
                     'current_file': filename,
                     'current_file_display': original_filename,
                     'current_cover': final_cover_filename,
-                    'current_title': metadata.get('title'),
-                    'current_artist': metadata.get('artist'),
-                    'current_album': metadata.get('album'),
+                    'current_title': audio_item.get('title'),
+                    'current_artist': audio_item.get('artist'),
+                    'current_album': audio_item.get('album'),
                     'is_playing': False,
                     'last_progress_s': 0,
                     'last_updated_at': time.time(),
+                    'current_is_stream': False,
+                    'current_image_url': client_image_url
                 })
                 
                 # Send both filenames to client for the new current song
@@ -1340,9 +1353,12 @@ def upload():
                     'filename': filename, 
                     'filename_display': original_filename,
                     'cover': final_cover_filename,
-                    'title': metadata.get('title'),
-                    'artist': metadata.get('artist'),
-                    'album': metadata.get('album')
+                    'title': audio_item.get('title'),
+                    'artist': audio_item.get('artist'),
+                    'album': audio_item.get('album'),
+                    'is_stream': False,
+                    'image_url': client_image_url,
+                    'video_id': client_video_id
                 }
                 socketio.emit('new_file', emit_data, to=room)
                 socketio.emit('pause', {'time': 0}, to=room)
