@@ -1563,8 +1563,9 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('[DEBUG] Display filename contains Japanese chars:', /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(data.filename_display));
         }
         
-        // Determine if this is actually a song change
-        const isNewSong = currentSongFile && currentSongFile !== data.filename;
+    // Determine if this is actually a song change
+    const incomingKey = data.filename || data.proxy_id || data.video_id || null;
+    const isNewSong = currentSongFile && currentSongFile !== incomingKey;
 
         // Song change: prepare slide if fullscreen; don't override existing direction
         if (isNewSong) {
@@ -1585,8 +1586,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (fnt) fnt.removeAttribute('data-fixed-color');
         }
 
-        // Track current song
-        currentSongFile = data.filename;
+    // Track current song using filename for uploads or proxy/video id for streams
+    currentSongFile = incomingKey;
 
         // Use display filename if available, otherwise fallback to filename
         const displayFilename = data.filename_display || data.filename;
@@ -1653,7 +1654,16 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Use display filename if available, otherwise fallback to filename
             const displayFilename = data.current_file_display || data.current_file;
-            loadAudio(data.current_file, data.current_cover, displayFilename, data.current_title, data.current_artist);
+            // Include proxy and remote image when present (for streamed songs)
+            loadAudio(
+                data.current_file,
+                data.current_cover,
+                displayFilename,
+                data.current_title,
+                data.current_artist,
+                data.current_proxy_id,
+                data.current_image_url
+            );
             let intendedTime = data.last_progress_s;
             if (data.is_playing) {
                 const timeSinceUpdate = (Date.now() + serverTimeOffset) / 1000 - data.last_updated_at;
@@ -1943,7 +1953,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // Set current song key for lyrics caching
         currentSongKey = generateSongKey(filename, title, artist);
         
-        if (!filename) {
+    // If neither a local filename nor a proxy stream ID is provided, treat as no selection
+    if (!filename && !proxyId) {
             songTitleElement.textContent = "No file selected";
             songArtistElement.textContent = "";
             // Hide both cover art and placeholder when no file is selected
@@ -2116,46 +2127,77 @@ document.addEventListener('DOMContentLoaded', () => {
                     coverArtPlaceholder.style.display = 'none';
                 }
                 
-                // Remote streamed song cover
-                coverArt.src = imageUrl;
+                // Remote streamed song cover via same-origin proxy for pixel access
+                const proxiedImageUrl = `/image_proxy?url=${encodeURIComponent(imageUrl)}`;
+                coverArt.src = proxiedImageUrl;
                 coverArt.style.display = 'block';
-                coverArt.onload = () => {
+
+                const runColorExtractionNow = () => {
                     try {
-                        const dominantColor = colorThief.getColor(coverArt);
-                        const palette = colorThief.getPalette(coverArt, 3); // Get top 3 colors
+                        if (!coverArt.complete || coverArt.naturalWidth === 0) {
+                            throw new Error('Image not decoded yet');
+                        }
+                        const extract = () => {
+                            const dominantColor = colorThief.getColor(coverArt);
+                            const palette = colorThief.getPalette(coverArt, 3);
+                            return { dominantColor, palette };
+                        };
+                        // Use rAF to ensure layout/paint is ready on mobile
+                        window.requestAnimationFrame(() => {
+                            const { dominantColor, palette } = extract();
                         currentDominantColor = dominantColor;
                         currentColorPalette = palette;
                         const [r, g, b] = dominantColor;
                         coverArt.style.boxShadow = `0 0 15px rgba(${r},${g},${b},0.6), 0 0 35px rgba(${r},${g},${b},0.4)`;
                         applyTheme(dominantColor, palette);
                         updateCoverPositionVars();
-                        
-                        // Ensure text contrast in fullscreen mode
-                        setTimeout(() => {
-                            ensureFullscreenContrast();
-                        }, 100);
-                        
-                        // Setup 3D tilt effect for cover art
+
+                        setTimeout(() => { ensureFullscreenContrast(); }, 100);
                         setup3DTiltEffect(coverArt);
-                        
-                        // Trigger slide-in animation if this is from a song change
                         if (lastChangeDirection) {
                             triggerSlideInAnimation(lastChangeDirection);
-                            lastChangeDirection = null; // Reset after use
+                            lastChangeDirection = null;
                         }
+                        });
                     } catch (e) {
                         console.error('Failed to extract color from remote cover:', e);
-                        resetTheme();
-                        // Still setup tilt effect even if color extraction fails
+                        // Fallback to metadata-based theme color on mobile
+                        try {
+                            const fallback = fallbackColorFromText(title || displayTitle || artist || 'AudioFlow');
+                            const palette = [fallback];
+                            currentDominantColor = fallback;
+                            currentColorPalette = palette;
+                            applyTheme(fallback, palette);
+                        } catch (_) {
+                            resetTheme();
+                        }
                         setup3DTiltEffect(coverArt);
-                        
-                        // Trigger slide-in animation if this is from a song change
                         if (lastChangeDirection) {
                             triggerSlideInAnimation(lastChangeDirection);
-                            lastChangeDirection = null; // Reset after use
+                            lastChangeDirection = null;
                         }
                     }
                 };
+
+                // Prefer decode() for mobile reliability; fallback to onload
+                const attemptImmediate = () => {
+                    if (coverArt.complete && coverArt.naturalWidth > 0) {
+                        runColorExtractionNow();
+                        return true;
+                    }
+                    return false;
+                };
+                if (!attemptImmediate()) {
+                    if (typeof coverArt.decode === 'function') {
+                        coverArt.decode().then(() => {
+                            if (!attemptImmediate()) runColorExtractionNow();
+                        }).catch(() => {
+                            coverArt.onload = () => runColorExtractionNow();
+                        });
+                    } else {
+                        coverArt.onload = () => runColorExtractionNow();
+                    }
+                }
                 coverArt.onerror = () => {
                     console.warn('Remote cover art failed to load, showing placeholder');
                     // Show placeholder when remote image fails
@@ -2166,7 +2208,16 @@ document.addEventListener('DOMContentLoaded', () => {
                         // Setup 3D tilt effect for placeholder
                         setup3DTiltEffect(coverArtPlaceholder);
                     }
-                    resetTheme();
+                    // Fallback theme color from metadata
+                    try {
+                        const fallback = fallbackColorFromText(title || displayTitle || artist || 'AudioFlow');
+                        const palette = [fallback];
+                        currentDominantColor = fallback;
+                        currentColorPalette = palette;
+                        applyTheme(fallback, palette);
+                    } catch (_) {
+                        resetTheme();
+                    }
                     updateCoverPositionVars();
                     
                     // Trigger slide-in animation if this is from a song change
@@ -2260,6 +2311,39 @@ document.addEventListener('DOMContentLoaded', () => {
             Math.pow(g2 - g1, 2) + 
             Math.pow(b2 - b1, 2)
         );
+    }
+
+    // Fallback: derive a stable theme color from text (title/artist) when image extraction fails
+    function fallbackColorFromText(text) {
+        if (!text) text = 'AudioFlow';
+        let hash = 0;
+        for (let i = 0; i < text.length; i++) {
+            hash = ((hash << 5) - hash) + text.charCodeAt(i);
+            hash |= 0; // Convert to 32bit
+        }
+        const hue = Math.abs(hash) % 360;
+        const saturation = 60; // %
+        const lightness = 45; // %
+        const h = hue / 360, s = saturation / 100, l = lightness / 100;
+        const hue2rgb = (p, q, t) => {
+            if (t < 0) t += 1;
+            if (t > 1) t -= 1;
+            if (t < 1/6) return p + (q - p) * 6 * t;
+            if (t < 1/2) return q;
+            if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+            return p;
+        };
+        let r, g, b;
+        if (s === 0) {
+            r = g = b = l; // achromatic
+        } else {
+            const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+            const p = 2 * l - q;
+            r = hue2rgb(p, q, h + 1/3);
+            g = hue2rgb(p, q, h);
+            b = hue2rgb(p, q, h - 1/3);
+        }
+        return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
     }
 
     function createColorShades(r, g, b) {
