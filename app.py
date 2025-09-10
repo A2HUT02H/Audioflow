@@ -29,12 +29,10 @@ from urllib.parse import urlparse
 import threading
 import time as _time
 from collections import OrderedDict
-from ytmusicapi import YTMusic
-import yt_dlp
 import concurrent.futures
 from PIL import Image
 import io
-
+from ytmusicapi import YTMusic
 # --- Configure optimized HTTP session for downloads ---
 def create_download_session():
     """Create an optimized requests session for downloads."""
@@ -72,119 +70,50 @@ def create_download_session():
 # Global download session
 download_session = create_download_session()
 
-def download_with_ytdlp(video_id, filepath, room):
-    """Try downloading directly with yt-dlp for potentially better speed."""
-    try:
-        print(f"[Room {room}] - Attempting yt-dlp direct download for video: {video_id}")
-        
-        # Use the best available format without conversion for maximum speed
-        ydl_opts = {
-            'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio[ext=ogg]/bestaudio/best',
-            'noplaylist': True,
-            'quiet': False,
-            'no_warnings': False,
-            'outtmpl': os.path.splitext(filepath)[0] + '.%(ext)s',  # Let yt-dlp choose extension
-            'concurrent_fragment_downloads': 8,  # More parallel downloads
-            'http_chunk_size': 2097152,  # 2MB chunks for faster download
-            'retries': 3,
-            'fragment_retries': 3,
-            # Explicitly disable any audio processing to prevent conversion
-            'extractaudio': False,  # Do not extract/convert audio
-            'postprocessors': [],   # No postprocessors
-            'writeautomaticsub': False,
-            'writesubtitles': False,
-        }
-        
-        start_time = time.time()
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
-        
-        # Find the downloaded file (could be any supported format)
-        base_path = os.path.splitext(filepath)[0]
-        possible_extensions = ['m4a', 'webm', 'ogg', 'mp3', 'opus', 'wav']
-        downloaded_file = None
-        
-        for ext in possible_extensions:
-            test_path = f"{base_path}.{ext}"
-            if os.path.exists(test_path):
-                downloaded_file = test_path
-                break
-        
-        if downloaded_file:
-            # Update the filepath to match the actual downloaded format
-            final_filename = os.path.basename(downloaded_file)
-            final_filepath = os.path.join(os.path.dirname(filepath), final_filename)
-            
-            if downloaded_file != final_filepath:
-                os.rename(downloaded_file, final_filepath)
-            
-            end_time = time.time()
-            download_time = end_time - start_time
-            file_size = os.path.getsize(final_filepath)
-            speed_mbps = (file_size / 1024 / 1024) / download_time if download_time > 0 else 0
-            print(f"[Room {room}] - yt-dlp download successful: {final_filename} ({file_size/1024/1024:.2f}MB in {download_time:.2f}s, {speed_mbps:.2f}MB/s)")
-            
-            # Return the actual filename that was downloaded
-            return final_filename
-        
-        print(f"[Room {room}] - yt-dlp download failed: No output file found")
-        return False
-        
-    except Exception as e:
-        print(f"[Room {room}] - yt-dlp download failed: {e}")
-        # Clean up any partial files
-        base_path = os.path.splitext(filepath)[0]
-        for ext in ['m4a', 'webm', 'ogg', 'mp3', 'opus', 'wav']:
-            partial_file = f"{base_path}.{ext}"
-            if os.path.exists(partial_file):
-                try:
-                    os.remove(partial_file)
-                except:
-                    pass
-        return False
+## Removed: server-side yt-dlp download helper and any direct YouTube fetching.
 
 def download_with_range_requests(url, filepath, room):
     """Try to download using multiple parallel range requests for better speed."""
     try:
         print(f"[Room {room}] - Attempting parallel range request download")
-        
+
         # Get file size first
         head_response = download_session.head(url, timeout=30)
         if 'Accept-Ranges' not in head_response.headers or head_response.headers['Accept-Ranges'] != 'bytes':
             print(f"[Room {room}] - Server doesn't support range requests")
             return False
-        
+
         content_length = head_response.headers.get('Content-Length')
         if not content_length:
             print(f"[Room {room}] - No Content-Length header, cannot use range requests")
             return False
-        
+
         total_size = int(content_length)
         if total_size < 1024 * 1024:  # Less than 1MB, not worth parallelizing
             print(f"[Room {room}] - File too small for parallel download")
             return False
-        
+
         # Split into 4 chunks
         num_chunks = 4
         chunk_size = total_size // num_chunks
-        
+
         def download_chunk(start, end, chunk_index):
             """Download a specific chunk of the file."""
             try:
                 headers = {'Range': f'bytes={start}-{end}'}
                 response = download_session.get(url, headers=headers, stream=True, timeout=120)
                 response.raise_for_status()
-                
+
                 chunk_data = b''
                 for data in response.iter_content(chunk_size=65536):  # 64KB sub-chunks
                     if data:
                         chunk_data += data
-                
+
                 return chunk_index, chunk_data
             except Exception as e:
                 print(f"[Room {room}] - Chunk {chunk_index} download failed: {e}")
                 return chunk_index, None
-        
+
         # Download chunks in parallel
         start_time = time.time()
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
@@ -194,7 +123,7 @@ def download_with_range_requests(url, filepath, room):
                 end = start + chunk_size - 1 if i < num_chunks - 1 else total_size - 1
                 future = executor.submit(download_chunk, start, end, i)
                 futures.append(future)
-            
+
             # Collect results
             chunks = [None] * num_chunks
             for future in concurrent.futures.as_completed(futures):
@@ -203,89 +132,18 @@ def download_with_range_requests(url, filepath, room):
                     print(f"[Room {room}] - Parallel download failed, chunk {chunk_index} missing")
                     return False
                 chunks[chunk_index] = chunk_data
-        
+
         # Write chunks to file
         with open(filepath, 'wb') as f:
             for chunk_data in chunks:
                 f.write(chunk_data)
-        
+
         end_time = time.time()
         download_time = end_time - start_time
         speed_mbps = (total_size / 1024 / 1024) / download_time if download_time > 0 else 0
         print(f"[Room {room}] - Parallel download successful: {total_size/1024/1024:.2f}MB in {download_time:.2f}s, {speed_mbps:.2f}MB/s")
         return True
-        
-    except Exception as e:
-        print(f"[Room {room}] - Parallel download failed: {e}")
-        return False
-        # First, get the file size
-        head_response = download_session.head(url, timeout=30)
-        if head_response.status_code != 200:
-            return False
-        
-        # Check if server supports range requests
-        accept_ranges = head_response.headers.get('Accept-Ranges', '').lower()
-        content_length = head_response.headers.get('Content-Length')
-        
-        if accept_ranges != 'bytes' or not content_length:
-            return False  # Fallback to regular download
-        
-        total_size = int(content_length)
-        if total_size < 1024 * 1024:  # Less than 1MB, use regular download
-            return False
-        
-        print(f"[Room {room}] - Attempting parallel download for {total_size/1024/1024:.2f}MB file")
-        
-        # Split into 4 chunks for parallel download
-        chunk_size = total_size // 4
-        chunks = []
-        
-        def download_chunk(start, end, chunk_idx):
-            try:
-                headers = {'Range': f'bytes={start}-{end}'}
-                response = download_session.get(url, headers=headers, stream=True, timeout=60)
-                if response.status_code == 206:  # Partial content
-                    data = b''
-                    for chunk in response.iter_content(chunk_size=65536):
-                        if chunk:
-                            data += chunk
-                    return chunk_idx, data
-                return chunk_idx, None
-            except Exception as e:
-                print(f"[Room {room}] - Chunk {chunk_idx} failed: {e}")
-                return chunk_idx, None
-        
-        # Download chunks in parallel
-        start_time = time.time()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            futures = []
-            for i in range(4):
-                start = i * chunk_size
-                end = start + chunk_size - 1 if i < 3 else total_size - 1
-                futures.append(executor.submit(download_chunk, start, end, i))
-            
-            # Collect results
-            chunk_results = [None] * 4
-            for future in concurrent.futures.as_completed(futures):
-                chunk_idx, data = future.result()
-                chunk_results[chunk_idx] = data
-        
-        # Check if all chunks downloaded successfully
-        if any(data is None for data in chunk_results):
-            print(f"[Room {room}] - Parallel download failed, some chunks missing")
-            return False
-        
-        # Write chunks in order
-        with open(filepath, 'wb') as f:
-            for data in chunk_results:
-                f.write(data)
-        
-        end_time = time.time()
-        download_time = end_time - start_time
-        speed_mbps = (total_size / 1024 / 1024) / download_time if download_time > 0 else 0
-        print(f"[Room {room}] - Parallel download successful: {total_size/1024/1024:.2f}MB in {download_time:.2f}s, {speed_mbps:.2f}MB/s")
-        return True
-        
+
     except Exception as e:
         print(f"[Room {room}] - Parallel download failed: {e}")
         return False
@@ -349,7 +207,7 @@ def sync_rooms_periodically():
                     socketio.emit('server_sync', {
                         'audio_time': room_state['last_progress_s'],
                         'server_time': room_state['last_updated_at']
-                    }, room=room_id)
+                    }, to=room_id)
         socketio.sleep(3)
 
 def allowed_file(filename):
@@ -654,6 +512,28 @@ def get_proxy_url(proxy_id):
         print(f"[DEBUG] Returning URL: {entry['url']}")
         return entry['url']
 
+@app.route('/register_proxy', methods=['POST'])
+def register_proxy():
+    """Register an arbitrary upstream URL and get a short-lived proxy_id.
+
+    Body JSON: { "url": "https://example.com/file" }
+    Returns: { success: true, proxy_id, expires_in }
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        url = data.get('url')
+        if not url or not isinstance(url, str):
+            return jsonify({'success': False, 'error': 'url is required'}), 400
+        # Basic scheme validation; we do not fetch here
+        parsed = urlparse(url)
+        if parsed.scheme not in ('http', 'https'):
+            return jsonify({'success': False, 'error': 'Unsupported URL scheme'}), 400
+        proxy_id = add_proxy_url(url)
+        return jsonify({'success': True, 'proxy_id': proxy_id, 'expires_in': PROXY_TTL})
+    except Exception as e:
+        print(f"[DEBUG] register_proxy error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 def enhance_youtube_thumbnail_quality(url, video_id=None):
     """
     Get YouTube thumbnail using the high-quality URL format and extract video ID if needed.
@@ -844,39 +724,8 @@ def crop_image_to_square_basic(image_data):
         return image_data  # Return original if cropping fails
 
 def get_youtube_audio_url(video_id):
-    """Extract audio stream URL from YouTube video using yt-dlp."""
-    try:
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': True,
-            'extractaudio': True,
-            'audioformat': 'mp3',
-            'outtmpl': '%(id)s.%(ext)s',
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
-            
-            # Look for the best audio stream
-            formats = info.get('formats', [])
-            audio_formats = [f for f in formats if f.get('acodec', 'none') != 'none' and f.get('vcodec', 'none') == 'none']
-            
-            if audio_formats:
-                # Sort by audio quality (higher abr is better)
-                audio_formats.sort(key=lambda x: x.get('abr', 0), reverse=True)
-                best_audio = audio_formats[0]
-                return best_audio.get('url')
-            
-            # Fallback to best format with audio
-            if formats:
-                best_format = formats[0]
-                return best_format.get('url')
-                
-    except Exception as e:
-        print(f"[DEBUG] Error extracting audio URL for {video_id}: {e}")
-        return None
+    """Deprecated: server must not resolve YouTube audio URLs. Always return None."""
+    return None
 
 def stream_remote_range(url):
     """Stream remote content while supporting Range requests from the client.
@@ -892,7 +741,17 @@ def stream_remote_range(url):
 
     # Stream from upstream
     print(f"[DEBUG] Making request to upstream URL...")
-    upstream = requests.get(url, headers=headers, stream=True, timeout=15)
+    # Use the optimized shared session; allow redirects
+    upstream = download_session.get(url, headers=headers, stream=True, timeout=20, allow_redirects=True)
+    # Some upstreams (Invidious instances) may reject Range for tiny probes. If 403/416 and we had Range, retry without Range.
+    if upstream.status_code in (403, 416) and 'Range' in headers:
+        try:
+            print(f"[DEBUG] Upstream returned {upstream.status_code} for ranged request. Retrying without Range...")
+            upstream.close()
+        except Exception:
+            pass
+        hdr_no_range = {k: v for k, v in headers.items() if k.lower() != 'range'}
+        upstream = download_session.get(url, headers=hdr_no_range, stream=True, timeout=20, allow_redirects=True)
     print(f"[DEBUG] Upstream response status: {upstream.status_code}")
     print(f"[DEBUG] Upstream response headers: {dict(upstream.headers)}")
 
@@ -930,7 +789,7 @@ def stream_remote_range(url):
 
     def generate():
         try:
-            for chunk in upstream.iter_content(chunk_size=8192):
+            for chunk in upstream.iter_content(chunk_size=65536):
                 if chunk:
                     yield chunk
         finally:
@@ -939,7 +798,11 @@ def stream_remote_range(url):
             except:
                 pass
 
-    return generate(), upstream.status_code, upstream_headers
+    # If upstream forbids access, avoid leaking a 403 to the browser which can confuse UI; map to 502 so frontend retries instance/itag
+    status = upstream.status_code
+    if status == 403:
+        status = 502
+    return generate(), status, upstream_headers
 
 
 @app.route('/search_ytmusic')
@@ -999,36 +862,30 @@ def search_ytmusic():
         # Search for songs - get multiple results
         search_limit = 5  # Hardcoded to 5 results
         search_results = ytmusic.search(q, filter='songs', limit=search_limit)
-        
+
         if not search_results:
             return jsonify({'success': False, 'error': 'No results found'}), 404
-        
+
         # Process up to 5 results
         processed_results = []
         for song in search_results[:5]:
             video_id = song.get('videoId')
-            
+
             if not video_id:
                 continue  # Skip results without video ID
-            
-            # Extract audio stream URL
-            audio_url = get_youtube_audio_url(video_id)
-            
-            if not audio_url:
-                continue  # Skip if can't get audio URL
-            
+
             # Extract metadata
             artists = song.get('artists', [])
             if isinstance(artists, list) and artists:
                 artist_str = ', '.join([artist.get('name', 'Unknown') for artist in artists])
             else:
                 artist_str = 'Unknown Artist'
-            
+
             # Get thumbnail - use the specific format with video_id for high quality
             thumbnails = song.get('thumbnails', [])
             image_url = ''
             if video_id:
-                # Use the specific YouTube thumbnail format you requested
+                # Use the specific YouTube thumbnail format
                 image_url = enhance_youtube_thumbnail_quality(None, video_id)
                 print(f"[DEBUG] Using high-quality thumbnail URL: {image_url}")
             elif thumbnails:
@@ -1042,29 +899,25 @@ def search_ytmusic():
                 else:
                     raw_url = thumbnails[-1].get('url', '')
                     image_url = enhance_youtube_thumbnail_quality(raw_url)
-            
+
             metadata = {
                 'title': song.get('title', 'Unknown Title'),
                 'artist': artist_str,
                 'image': image_url,
+                'image_url': image_url,
                 'duration': song.get('duration_seconds'),
                 'album': song.get('album', {}).get('name', '') if song.get('album') else ''
             }
-            
-            # Create proxy id for the audio URL
-            proxy_id = add_proxy_url(audio_url)
-            
+
+            # Do not resolve audio URLs server-side; client will handle via third-party API
             processed_results.append({
-                'proxy_id': proxy_id,
                 'metadata': metadata,
-                'video_id': video_id,
-                'expires_in': PROXY_TTL,
-                'is_stream': True
+                'video_id': video_id
             })
-        
+
         if not processed_results:
             return jsonify({'success': False, 'error': 'No valid results found'}), 404
-        
+
         return jsonify({
             'success': True,
             'results': processed_results,
