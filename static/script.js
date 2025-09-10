@@ -4608,72 +4608,141 @@ document.addEventListener('fullscreenchange', () => {
         function closeSearchModal() { searchModal.style.display = 'none'; }
 
         async function doSearch(q) {
-            // --- Multi-layer validation before fetching ---
-            const now = Date.now();
-            if (!pageReady || !userHasInteracted || searchInProgress || (now - lastSearchTime < 1500)) {
-                console.log(`[DEBUG] Search blocked. Conditions: pageReady=${pageReady}, userHasInteracted=${userHasInteracted}, searchInProgress=${searchInProgress}, timeSinceLast=${now - lastSearchTime}`);
-                return;
-            }
-            
             const trimmedQuery = q.trim();
-            if (trimmedQuery.length === 0) {
-                console.log('[DEBUG] Search skipped: Query is empty.');
-                return;
-            }
+            if (trimmedQuery.length === 0) return;
 
-            console.log(`[DEBUG] Executing search for: "${trimmedQuery}"`);
-            lastSearchTime = now;
-            searchInProgress = true;
             searchResults.innerHTML = '<p class="loading-members">Searching...</p>';
 
             try {
-                const res = await fetch(`/search_ytmusic?q=${encodeURIComponent(trimmedQuery)}&limit=5`);
+                const res = await fetch(`/search_ytmusic?q=${encodeURIComponent(trimmedQuery)}`);
                 const data = await res.json();
 
-                if (!data.success) {
-                    searchResults.innerHTML = `<p class="no-members">${data.error || 'Search failed'}</p>`;
+                if (!data.success || !data.results || data.results.length === 0) {
+                    searchResults.innerHTML = `<p class="no-members">${data.error || 'No results found'}</p>`;
                     return;
                 }
 
-                if (data.results && data.results.length > 0) {
-                    let html = '';
-                    data.results.forEach((result, index) => {
-                        const md = result.metadata || {};
-                        const duration = md.duration ? formatDuration(md.duration) : '';
-                        html += `
-                            <div class="search-result-item" style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.1);">
-                                <img src="${md.image || ''}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;display:${md.image ? 'block' : 'none'}" />
-                                <div style="flex:1;min-width:0;">
-                                    <div style="font-weight:600;font-size:0.95rem;margin-bottom:2px;">${md.title || 'Unknown'}</div>
-                                    <div style="color:rgba(255,255,255,0.7);font-size:0.85rem;">${md.artist || 'Unknown'}</div>
-                                </div>
-                                <button class="download-btn control-button" data-index="${index}">Add</button>
-                            </div>`;
+                let html = '';
+                data.results.forEach((result, index) => {
+                    const md = result.metadata || {};
+                    const duration = md.duration ? formatDuration(md.duration) : '';
+                    html += `
+                        <div class="search-result-item" style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.1);">
+                            <img src="${md.image_url || ''}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;display:${md.image_url ? 'block' : 'none'}" />
+                            <div style="flex:1;min-width:0;">
+                                <div style="font-weight:600;font-size:0.95rem;margin-bottom:2px;">${md.title || 'Unknown'}</div>
+                                <div style="color:rgba(255,255,255,0.7);font-size:0.85rem;">${md.artist || 'Unknown'}</div>
+                            </div>
+                            <button class="add-via-client-btn control-button" data-index="${index}">Add</button>
+                        </div>`;
+                });
+                searchResults.innerHTML = html;
+
+                // Add event listeners for the new buttons
+                document.querySelectorAll('.add-via-client-btn').forEach(btn => {
+                    btn.addEventListener('click', async (e) => {
+                        const button = e.target;
+                        const index = parseInt(button.getAttribute('data-index'));
+                        const result = data.results[index];
+
+                        button.textContent = 'Processing...';
+                        button.disabled = true;
+
+                        await addSongViaClient(result, button);
                     });
-                    searchResults.innerHTML = html;
-                    // Add event listeners after rendering results
-                    document.querySelectorAll('.download-btn').forEach(btn => {
-                        btn.addEventListener('click', async (e) => {
-                            const index = parseInt(e.target.getAttribute('data-index'));
-                            const result = data.results[index];
-                            e.target.textContent = 'Adding...';
-                            e.target.disabled = true;
-                            await downloadAndAddToQueue(result);
-                            e.target.textContent = 'Added!';
-                            setTimeout(() => {
-                                e.target.textContent = 'Add';
-                                e.target.disabled = false;
-                            }, 2000);
-                        });
-                    });
-                } else {
-                    searchResults.innerHTML = '<p class="no-members">No results found</p>';
-                }
+                });
+
             } catch (err) {
                 console.error('Search fetch error:', err);
-                searchResults.innerHTML = '<p class="no-members">An error occurred.</p>';
-            } finally {
-                searchInProgress = false;
+                searchResults.innerHTML = '<p class="no-members">An error occurred during search.</p>';
+            }
+        }
+
+        // Map Content-Type to file extension for accurate uploads
+        function guessAudioExtension(contentType) {
+            if (!contentType) return 'mp3';
+            contentType = contentType.toLowerCase();
+            if (contentType.includes('audio/mpeg')) return 'mp3';
+            if (contentType.includes('audio/mp4') || contentType.includes('audio/x-m4a')) return 'm4a';
+            if (contentType.includes('audio/webm')) return 'webm';
+            if (contentType.includes('audio/ogg')) return 'ogg';
+            if (contentType.includes('audio/opus')) return 'opus';
+            if (contentType.includes('audio/aac')) return 'aac';
+            return 'mp3';
+        }
+
+        async function addSongViaClient(result, buttonElement) {
+            const videoId = result.video_id;
+            const metadata = result.metadata;
+            const imageUrl = (metadata && (metadata.image || metadata.image_url)) || '';
+
+            try {
+                // --- Step 1: Ask the Cobalt proxy for a download link ---
+                buttonElement.textContent = 'Fetching...';
+                const cobaltResponse = await fetch('https://co.wuk.sh/api/json', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                    body: JSON.stringify({
+                        url: `https://www.youtube.com/watch?v=${videoId}`,
+                        isAudioOnly: true
+                    })
+                });
+                
+                const cobaltData = await cobaltResponse.json();
+                
+                if (cobaltData.status !== 'success') {
+                    throw new Error(cobaltData.text || 'Failed to get download link from proxy.');
+                }
+
+                const audioDownloadUrl = cobaltData.url;
+
+                // --- Step 2: Download the audio to the browser's memory as a Blob ---
+                buttonElement.textContent = 'Downloading...';
+                const audioResponse = await fetch(audioDownloadUrl);
+                if (!audioResponse.ok) {
+                    throw new Error(`Download failed (${audioResponse.status})`);
+                }
+                const contentType = audioResponse.headers.get('Content-Type') || '';
+                const ext = guessAudioExtension(contentType);
+                const audioBlob = await audioResponse.blob();
+
+                // --- Step 3: Upload that Blob to your server's /upload endpoint ---
+                buttonElement.textContent = 'Uploading...';
+                const formData = new FormData();
+                const safeArtist = (metadata.artist || 'Unknown Artist').replace(/[<>:"/\\|?*]+/g, ' ').trim();
+                const safeTitle = (metadata.title || 'Unknown Title').replace(/[<>:"/\\|?*]+/g, ' ').trim();
+                const fileName = `${safeArtist} - ${safeTitle}.${ext}`; // Accurate extension from content-type
+                formData.append('audio', audioBlob, fileName);
+                formData.append('room', roomId);
+                formData.append('title', metadata.title || '');
+                formData.append('artist', metadata.artist || '');
+                formData.append('album', metadata.album || '');
+                formData.append('image_url', imageUrl);
+                formData.append('video_id', videoId || '');
+
+                const uploadResponse = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const uploadResult = await uploadResponse.json();
+
+                if (uploadResult.success) {
+                    buttonElement.textContent = 'Added!';
+                    setTimeout(() => closeSearchModal(), 500); // Close modal on success
+                } else {
+                    throw new Error(uploadResult.error || 'Upload to server failed.');
+                }
+
+            } catch (error) {
+                console.error('Failed to add song via client:', error);
+                buttonElement.textContent = 'Error';
+                buttonElement.style.backgroundColor = '#d32f2f'; // Make error visible
+                setTimeout(() => {
+                    buttonElement.textContent = 'Add';
+                    buttonElement.disabled = false;
+                    buttonElement.style.backgroundColor = '';
+                }, 3000);
             }
         }
 
