@@ -4671,34 +4671,125 @@ document.addEventListener('fullscreenchange', () => {
             return 'mp3';
         }
 
+        // Resilient fetch with timeouts (used by Invidious requests)
+        async function fetchWithTimeout(url, options = {}, timeoutMs = 7000) {
+            const controller = new AbortController();
+            const id = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                return await fetch(url, { ...options, signal: controller.signal });
+            } finally {
+                clearTimeout(id);
+            }
+        }
+
+        // Invidious instances to try (ordered by typical reliability)
+        const INVIDIOUS_INSTANCES = [
+            'https://yewtu.be',
+            'https://invidious.privacydev.net',
+            'https://inv.nadeko.net',
+            'https://invidious.lunar.icu',
+            'https://vid.puffyan.us'
+        ];
+
+        // Prefer common audio itags: 251 (webm/opus ~160kbps), 140 (m4a ~128kbps), 250/249 (lower opus)
+    const PREFERRED_AUDIO_ITAGS = [140, 251, 250, 249];
+
+        async function probeInvidiousUrl(url) {
+            // Register URL with server and probe via same-origin proxy to avoid CORS
+            const regResp = await fetch('/register_proxy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url })
+            });
+            const regData = await regResp.json().catch(() => ({}));
+            if (!regResp.ok || !regData.success || !regData.proxy_id) {
+                return null;
+            }
+            const proxyId = regData.proxy_id;
+            const resp = await fetchWithTimeout(`/stream_proxy/${proxyId}`, {
+                method: 'GET',
+                headers: { 'Range': 'bytes=0-0' }
+            }, 8000);
+            if (resp.ok || resp.status === 206) return { proxyId };
+            return null;
+        }
+
+        async function getInvidiousAudioUrl(videoId, excludeSet) {
+            let lastError = null;
+            const excluded = excludeSet || new Set();
+            for (const base of INVIDIOUS_INSTANCES) {
+                for (const itag of PREFERRED_AUDIO_ITAGS) {
+                    const comboKey = `${base}|${itag}`;
+                    if (excluded.has(comboKey)) continue;
+                    const url = `${base}/latest_version?id=${encodeURIComponent(videoId)}&itag=${itag}&local=true`;
+                    try {
+            const result = await probeInvidiousUrl(url);
+                        if (result && result.proxyId) return { url, proxyId: result.proxyId, debug: { base, itag } };
+                    } catch (e) {
+                        lastError = e;
+                        // try next itag/instance
+                    }
+                }
+            }
+            throw lastError || new Error('No working Invidious audio stream found');
+        }
+
         async function addSongViaClient(result, buttonElement) {
             const videoId = result.video_id;
             const metadata = result.metadata;
             const imageUrl = (metadata && (metadata.image || metadata.image_url)) || '';
 
             try {
-                // --- Step 1: Ask the Cobalt proxy for a download link ---
+                // --- Step 1: Resolve an audio stream via Invidious ---
                 buttonElement.textContent = 'Fetching...';
-                const cobaltResponse = await fetch('https://co.wuk.sh/api/json', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                    body: JSON.stringify({
-                        url: `https://www.youtube.com/watch?v=${videoId}`,
-                        isAudioOnly: true
-                    })
-                });
-                
-                const cobaltData = await cobaltResponse.json();
-                
-                if (cobaltData.status !== 'success') {
-                    throw new Error(cobaltData.text || 'Failed to get download link from proxy.');
+                const excluded = new Set();
+                let inv = await getInvidiousAudioUrl(videoId, excluded);
+                let audioDownloadUrl = inv.url;
+
+                // --- Step 2: Register the URL with server and download via same-origin proxy to bypass CORS ---
+                buttonElement.textContent = 'Preparing...';
+                let proxyId = inv.proxyId;
+                if (!proxyId) {
+                    // Fallback: register now if probe didn’t provide it (shouldn’t happen now)
+                    const regResp = await fetch('/register_proxy', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: audioDownloadUrl })
+                    });
+                    const regData = await regResp.json();
+                    if (!regResp.ok || !regData.success || !regData.proxy_id) {
+                        throw new Error(regData.error || 'Failed to register proxy URL');
+                    }
+                    proxyId = regData.proxy_id;
                 }
 
-                const audioDownloadUrl = cobaltData.url;
-
-                // --- Step 2: Download the audio to the browser's memory as a Blob ---
+                // Now download the audio through our Range-aware proxy (same-origin, CORS-safe)
                 buttonElement.textContent = 'Downloading...';
-                const audioResponse = await fetch(audioDownloadUrl);
+                let audioResponse = await fetchWithTimeout(`/stream_proxy/${proxyId}`, { mode: 'cors' }, 20000);
+                // If upstream forbids (mapped to 502) or true 403, try a different instance/itag
+                let retries = 0;
+                const maxRetries = Math.min(INVIDIOUS_INSTANCES.length * PREFERRED_AUDIO_ITAGS.length - 1, 5);
+                while ((audioResponse.status === 502 || audioResponse.status === 403) && retries < maxRetries) {
+                    retries++;
+                    excluded.add(`${inv.debug.base}|${inv.debug.itag}`);
+                    buttonElement.textContent = `Retrying ${retries}/${maxRetries}...`;
+                    inv = await getInvidiousAudioUrl(videoId, excluded);
+                    audioDownloadUrl = inv.url;
+                    proxyId = inv.proxyId || proxyId;
+                    if (!inv.proxyId) {
+                        const regResp2 = await fetch('/register_proxy', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ url: audioDownloadUrl })
+                        });
+                        const regData2 = await regResp2.json();
+                        if (!regResp2.ok || !regData2.success || !regData2.proxy_id) {
+                            throw new Error(regData2.error || 'Failed to register proxy URL');
+                        }
+                        proxyId = regData2.proxy_id;
+                    }
+                    audioResponse = await fetchWithTimeout(`/stream_proxy/${proxyId}`, { mode: 'cors' }, 20000);
+                }
                 if (!audioResponse.ok) {
                     throw new Error(`Download failed (${audioResponse.status})`);
                 }
@@ -4736,13 +4827,20 @@ document.addEventListener('fullscreenchange', () => {
 
             } catch (error) {
                 console.error('Failed to add song via client:', error);
-                buttonElement.textContent = 'Error';
-                buttonElement.style.backgroundColor = '#d32f2f'; // Make error visible
+                let msg = 'Error';
+                const errStr = String(error).toLowerCase();
+                if (errStr.includes('failed to fetch') || errStr.includes('resolve') || errStr.includes('abort')) {
+                    msg = 'Network/DNS error';
+                } else if (errStr.includes('no working invidious') || errStr.includes('no audio')) {
+                    msg = 'No audio found';
+                }
+                buttonElement.textContent = msg;
+                buttonElement.style.backgroundColor = '#d32f2f';
                 setTimeout(() => {
                     buttonElement.textContent = 'Add';
                     buttonElement.disabled = false;
                     buttonElement.style.backgroundColor = '';
-                }, 3000);
+                }, 3500);
             }
         }
 
