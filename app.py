@@ -902,6 +902,32 @@ def stream_remote_range(url):
         if h in upstream.headers:
             upstream_headers[h] = upstream.headers[h]
 
+    # Ensure a sensible Content-Type for audio if missing
+    if 'Content-Type' not in upstream_headers:
+        import mimetypes
+        guessed, _ = mimetypes.guess_type(url)
+        if guessed and guessed.startswith('audio/'):
+            upstream_headers['Content-Type'] = guessed
+        else:
+            # Common fallbacks for youtube streams
+            ct = 'audio/mp4'
+            if '.mp3' in url:
+                ct = 'audio/mpeg'
+            elif '.webm' in url:
+                ct = 'audio/webm'
+            upstream_headers['Content-Type'] = ct
+
+    # Ensure Range support headers
+    if range_header and 'Accept-Ranges' not in upstream_headers:
+        upstream_headers['Accept-Ranges'] = 'bytes'
+
+    # CORS headers so the audio element can use the stream
+    upstream_headers['Access-Control-Allow-Origin'] = '*'
+    upstream_headers['Access-Control-Allow-Headers'] = 'Range, Origin, Accept, Content-Type'
+    upstream_headers['Access-Control-Expose-Headers'] = 'Content-Range, Accept-Ranges, Content-Length, Content-Type'
+    # Light caching to avoid revalidation on chunks
+    upstream_headers.setdefault('Cache-Control', 'public, max-age=600')
+
     def generate():
         try:
             for chunk in upstream.iter_content(chunk_size=8192):
@@ -1032,7 +1058,8 @@ def search_ytmusic():
                 'proxy_id': proxy_id,
                 'metadata': metadata,
                 'video_id': video_id,
-                'expires_in': PROXY_TTL
+                'expires_in': PROXY_TTL,
+                'is_stream': True
             })
         
         if not processed_results:
@@ -1071,252 +1098,142 @@ def stream_proxy(proxy_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/image_proxy')
+def image_proxy():
+    """Proxy remote images so the frontend can safely read pixels (CORS-friendly)."""
+    from flask import Response
+    import mimetypes
+    img_url = request.args.get('url')
+    if not img_url:
+        return jsonify({'success': False, 'error': 'url query param required'}), 400
+    try:
+        # Stream image from upstream
+        r = download_session.get(img_url, stream=True, timeout=15)
+        if r.status_code >= 400:
+            return jsonify({'success': False, 'error': f'upstream returned {r.status_code}'}), 502
+
+        # Determine content-type
+        ct = r.headers.get('Content-Type')
+        if not ct:
+            guessed, _ = mimetypes.guess_type(img_url)
+            ct = guessed or 'image/jpeg'
+
+        def generate():
+            try:
+                for chunk in r.iter_content(chunk_size=16384):
+                    if chunk:
+                        yield chunk
+            finally:
+                try:
+                    r.close()
+                except:
+                    pass
+
+        headers = {
+            'Content-Type': ct,
+            'Cache-Control': 'public, max-age=1800',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Expose-Headers': 'Content-Length, Content-Type'
+        }
+        # Pass through content-length if present
+        if 'Content-Length' in r.headers:
+            headers['Content-Length'] = r.headers['Content-Length']
+
+        return Response(generate(), status=200, headers=headers)
+    except Exception as e:
+        print(f"[DEBUG] image_proxy error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/add_to_queue', methods=['POST'])
 def add_to_queue():
-    """Download and save a searched song to make it permanent like uploaded files."""
+    """Add a searched song to the queue for streaming (no download)."""
     data = request.get_json()
     room = data.get('room')
     proxy_id = data.get('proxy_id')
     metadata = data.get('metadata', {})
-    video_id = data.get('video_id')  # Add video_id for yt-dlp downloads
-    
+    video_id = data.get('video_id')
+
     if not room or room not in rooms_data:
         return jsonify({'success': False, 'error': 'Invalid or expired room'}), 400
-    
+
     if not proxy_id:
         return jsonify({'success': False, 'error': 'Proxy ID required'}), 400
-    
-    # Get the streaming URL
+
     url = get_proxy_url(proxy_id)
     if not url:
         return jsonify({'success': False, 'error': 'Invalid or expired proxy ID'}), 400
-    
+
     try:
-        # Create filename for saving - handle None values properly
         title = metadata.get('title') or 'Unknown Title'
         artist = metadata.get('artist') or 'Unknown Artist'
-        
-        # Clean up title and artist for filename
-        title = str(title).replace('/', '_').replace('\\', '_').replace('|', '_').strip()
-        artist = str(artist).replace('/', '_').replace('\\', '_').replace('|', '_').strip()
-        
-        # Fallback if still empty
-        if not title or title == 'None':
-            title = 'Unknown Title'
-        if not artist or artist == 'None':
-            artist = 'Unknown Artist'
-            
-        # Create base filename without extension (yt-dlp will add the appropriate extension)
-        base_filename = f"{artist} - {title}"
-        base_filepath = os.path.join(UPLOAD_FOLDER, base_filename)
-        
-        print(f"[Room {room}] - Creating base filename: {base_filename}")
-        print(f"[Room {room}] - Metadata received: title='{metadata.get('title')}', artist='{metadata.get('artist')}'")
-        
-        # Check if file already exists (check all supported formats)
-        existing_file = None
-        for ext in ALLOWED_EXTENSIONS:
-            test_path = f"{base_filepath}.{ext}"
-            if os.path.exists(test_path):
-                existing_file = f"{base_filename}.{ext}"
-                break
-        
-        actual_filename = existing_file
-        
-        if existing_file:
-            print(f"[Room {room}] - File already exists: {existing_file}")
-        else:
-            # Try different download methods for best speed
-            print(f"[Room {room}] - Downloading: {base_filename}")
-            download_success = False
-            
-            # Method 1: Try yt-dlp direct download if video_id is available (PRIORITY)
-            if video_id:
-                print(f"[Room {room}] - Using yt-dlp with video_id: {video_id}")
-                result = download_with_ytdlp(video_id, f"{base_filepath}.tmp", room)
-                if result:
-                    actual_filename = result
-                    download_success = True
-                    print(f"[Room {room}] - yt-dlp download completed successfully! File: {actual_filename}")
-                else:
-                    print(f"[Room {room}] - yt-dlp download failed, trying fallback methods")
-            else:
-                print(f"[Room {room}] - No video_id provided, skipping yt-dlp direct download")
-            
-            # Method 2: Try parallel download with range requests (only if yt-dlp failed)
-            if not download_success:
-                # For fallback methods, use .m4a as default
-                fallback_filename = f"{base_filename}.m4a"
-                fallback_filepath = os.path.join(UPLOAD_FOLDER, fallback_filename)
-                
-                print(f"[Room {room}] - Attempting parallel range request download")
-                download_success = download_with_range_requests(url, fallback_filepath, room)
-                if download_success:
-                    actual_filename = fallback_filename
-                    print(f"[Room {room}] - Parallel download completed successfully!")
-            
-            # Method 3: Fallback to regular download (only if both above failed)
-            if not download_success:
-                # For regular download, use .m4a as default
-                fallback_filename = f"{base_filename}.m4a"
-                fallback_filepath = os.path.join(UPLOAD_FOLDER, fallback_filename)
-                
-                print(f"[Room {room}] - Falling back to regular stream download")
-                response = download_session.get(url, stream=True, timeout=120)
-                response.raise_for_status()
-                
-                # Use even larger chunk size for better speed
-                total_size = 0
-                start_time = time.time()
-                with open(fallback_filepath, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=262144):  # 256KB chunks
-                        if chunk:
-                            f.write(chunk)
-                            total_size += len(chunk)
-                
-                end_time = time.time()
-                download_time = end_time - start_time
-                speed_mbps = (total_size / 1024 / 1024) / download_time if download_time > 0 else 0
-                print(f"[Room {room}] - Regular download completed: {fallback_filename} ({total_size/1024/1024:.2f}MB in {download_time:.2f}s, {speed_mbps:.2f}MB/s)")
-                actual_filename = fallback_filename
-                download_success = True
-        
-        # Use the actual downloaded filename
-        final_filepath = os.path.join(UPLOAD_FOLDER, actual_filename) if actual_filename else None
-        
-        # Download cover art from URL if available (parallel with metadata extraction)
-        cover_filename = None
+        album = metadata.get('album', '')
         image_url = metadata.get('image')
-        if image_url:
-            try:
-                # Use the enhanced image URL (already uses hqdefault format)
-                cover_filename = f"{base_filename}_cover.jpg"
-                cover_path = os.path.join(UPLOAD_FOLDER, cover_filename)
-                
-                print(f"[Room {room}] - Downloading cover art from: {image_url}")
-                
-                # Download cover art with optimized settings
-                cover_response = download_session.get(image_url, timeout=30, stream=True)
-                cover_response.raise_for_status()
-                
-                # Read the image data
-                image_data = b''
-                for chunk in cover_response.iter_content(chunk_size=32768):  # 32KB chunks
-                    if chunk:
-                        image_data += chunk
-                
-                # Crop the image to square 1:1 ratio
-                print(f"[Room {room}] - Cropping image to square format")
-                cropped_image_data = crop_image_to_square(image_data)
-                
-                # Save the cropped image
-                with open(cover_path, 'wb') as f:
-                    f.write(cropped_image_data)
-                
-                # Check final image size
-                file_size = os.path.getsize(cover_path)
-                print(f"[Room {room}] - Cover art downloaded and cropped: {cover_filename} ({file_size/1024:.1f}KB)")
-                
-            except Exception as cover_error:
-                print(f"[Room {room}] - Failed to download/crop cover art: {cover_error}")
-                cover_filename = None
-        
-        # Extract metadata and cover art like uploaded files (only if we have a file)
-        audio_metadata = {}
-        if final_filepath and os.path.exists(final_filepath):
-            audio_metadata = extract_metadata(final_filepath)
-        
-        # Fallback to extracting embedded cover art if URL download failed
-        if not cover_filename and final_filepath and os.path.exists(final_filepath):
-            cover_data, cover_ext = extract_cover_art(final_filepath)
-            if cover_data:
-                cover_filename = f"{base_filename}_cover.{cover_ext}"
-                cover_path = os.path.join(UPLOAD_FOLDER, cover_filename)
-                with open(cover_path, 'wb') as f:
-                    f.write(cover_data)
-        
-        # Use thread lock only for queue operations (not download)
+
         with thread_lock:
-            # Create audio item for queue (same format as uploaded files)
-            # Use the original metadata if audio_metadata extraction failed
-            final_title = audio_metadata.get('title') or title
-            final_artist = audio_metadata.get('artist') or artist
-            final_album = audio_metadata.get('album') or metadata.get('album', '')
-            
             audio_item = {
-                'filename': actual_filename,
-                'filename_display': f"{final_title} - {final_artist}",
-                'cover': cover_filename,
+                'filename': None,
+                'filename_display': f"{title} - {artist}",
+                'cover': None,
                 'upload_time': time.time(),
-                'title': final_title,
-                'artist': final_artist,
-                'album': final_album,
-                'proxy_id': None,  # No proxy ID needed for saved files
-                'is_stream': False,  # This is now a saved file
-                'image_url': None,  # Use local cover instead
-                'video_id': None  # Not needed for saved files
+                'title': title,
+                'artist': artist,
+                'album': album,
+                'proxy_id': proxy_id,
+                'is_stream': True,
+                'image_url': image_url,
+                'video_id': video_id
             }
-            
-            # Initialize queue if it doesn't exist
             if 'queue' not in rooms_data[room]:
                 rooms_data[room]['queue'] = []
             if 'current_index' not in rooms_data[room]:
                 rooms_data[room]['current_index'] = -1
-            
-            # Add to queue
             rooms_data[room]['queue'].append(audio_item)
-            
-            # If no song is currently loaded, set this as current
             if rooms_data[room]['current_file'] is None:
                 rooms_data[room]['current_index'] = len(rooms_data[room]['queue']) - 1
                 rooms_data[room].update({
-                    'current_file': actual_filename,
+                    'current_file': None,
                     'current_file_display': audio_item['filename_display'],
-                    'current_cover': audio_item['cover'],
-                    'current_title': audio_item['title'],
-                    'current_artist': audio_item['artist'],
-                    'current_album': audio_item['album'],
+                    'current_cover': None,
+                    'current_title': title,
+                    'current_artist': artist,
+                    'current_album': album,
                     'is_playing': False,
                     'last_progress_s': 0,
                     'last_updated_at': time.time(),
-                    'current_proxy_id': None,
-                    'current_is_stream': False,
-                    'current_image_url': None
+                    'current_proxy_id': proxy_id,
+                    'current_is_stream': True,
+                    'current_image_url': image_url
                 })
-                
-                # Send data to client for the new current song
                 emit_data = {
-                    'filename': actual_filename, 
+                    'filename': None,
                     'filename_display': audio_item['filename_display'],
-                    'cover': audio_item['cover'],
-                    'title': audio_item['title'],
-                    'artist': audio_item['artist'],
-                    'album': audio_item['album'],
-                    'proxy_id': None,
-                    'is_stream': False,
-                    'image_url': None
+                    'cover': None,
+                    'title': title,
+                    'artist': artist,
+                    'album': album,
+                    'proxy_id': proxy_id,
+                    'is_stream': True,
+                    'image_url': image_url,
+                    'video_id': video_id
                 }
                 socketio.emit('new_file', emit_data, to=room)
                 socketio.emit('pause', {'time': 0}, to=room)
-            
-            # Always emit queue update
             socketio.emit('queue_update', {
                 'queue': rooms_data[room]['queue'],
                 'current_index': rooms_data[room]['current_index']
             }, to=room)
-        
         return jsonify({
-            'success': True, 
-            'message': 'Song downloaded and added to queue',
+            'success': True,
+            'message': 'Song added to queue for streaming',
             'display_name': audio_item['filename_display'],
-            'filename': actual_filename
+            'filename': None
         })
-
     except Exception as e:
-        print(f"ERROR downloading and adding song to queue for room '{room}': {str(e)}")
+        print(f"ERROR adding song to queue for room '{room}': {str(e)}")
         return jsonify({
             'success': False,
-            'error': f'Failed to download and add to queue: {str(e)}'
+            'error': f'Failed to add to queue: {str(e)}'
         }), 500
 
 
@@ -1490,9 +1407,9 @@ def play_from_queue(room_id, index):
         # Update current song
         audio_item = queue[index]
         rooms_data[room_id].update({
-            'current_file': audio_item['filename'],
-            'current_file_display': audio_item['filename_display'],
-            'current_cover': audio_item['cover'],
+            'current_file': audio_item.get('filename'),
+            'current_file_display': audio_item.get('filename_display'),
+            'current_cover': audio_item.get('cover'),
             'current_title': audio_item.get('title'),
             'current_artist': audio_item.get('artist'),
             'current_album': audio_item.get('album'),
@@ -1500,16 +1417,25 @@ def play_from_queue(room_id, index):
             'is_playing': False,
             'last_progress_s': 0,
             'last_updated_at': time.time(),
+            # stream-aware state
+            'current_proxy_id': audio_item.get('proxy_id'),
+            'current_is_stream': audio_item.get('is_stream', False),
+            'current_image_url': audio_item.get('image_url')
         })
     
     # Emit new song to all clients
     emit_data = {
-        'filename': audio_item['filename'],
-        'filename_display': audio_item['filename_display'],
-        'cover': audio_item['cover'],
+        'filename': audio_item.get('filename'),
+        'filename_display': audio_item.get('filename_display'),
+        'cover': audio_item.get('cover'),
         'title': audio_item.get('title'),
         'artist': audio_item.get('artist'),
-        'album': audio_item.get('album')
+        'album': audio_item.get('album'),
+        # stream fields
+        'proxy_id': audio_item.get('proxy_id'),
+        'is_stream': audio_item.get('is_stream', False),
+        'image_url': audio_item.get('image_url'),
+        'video_id': audio_item.get('video_id')
     }
     socketio.emit('new_file', emit_data, to=room_id)
     socketio.emit('pause', {'time': 0}, to=room_id)
@@ -1946,9 +1872,9 @@ def handle_next_song(data):
 
         audio_item = queue[next_index]
         rooms_data[room].update({
-            'current_file': audio_item['filename'],
-            'current_file_display': audio_item['filename_display'],
-            'current_cover': audio_item['cover'],
+            'current_file': audio_item.get('filename'),
+            'current_file_display': audio_item.get('filename_display'),
+            'current_cover': audio_item.get('cover'),
             'current_title': audio_item.get('title'),
             'current_artist': audio_item.get('artist'),
             'current_album': audio_item.get('album'),
@@ -1956,15 +1882,22 @@ def handle_next_song(data):
             'is_playing': auto_play,
             'last_progress_s': 0,
             'last_updated_at': time.time(),
+            'current_proxy_id': audio_item.get('proxy_id'),
+            'current_is_stream': audio_item.get('is_stream', False),
+            'current_image_url': audio_item.get('image_url')
         })
 
     emit_data = {
-        'filename': audio_item['filename'],
-        'filename_display': audio_item['filename_display'],
-        'cover': audio_item['cover'],
+        'filename': audio_item.get('filename'),
+        'filename_display': audio_item.get('filename_display'),
+        'cover': audio_item.get('cover'),
         'title': audio_item.get('title'),
         'artist': audio_item.get('artist'),
-        'album': audio_item.get('album')
+        'album': audio_item.get('album'),
+        'proxy_id': audio_item.get('proxy_id'),
+        'is_stream': audio_item.get('is_stream', False),
+        'image_url': audio_item.get('image_url'),
+        'video_id': audio_item.get('video_id')
     }
     socketio.emit('new_file', emit_data, to=room)
 
@@ -2002,9 +1935,9 @@ def handle_previous_song(data):
 
         audio_item = queue[prev_index]
         rooms_data[room].update({
-            'current_file': audio_item['filename'],
-            'current_file_display': audio_item['filename_display'],
-            'current_cover': audio_item['cover'],
+            'current_file': audio_item.get('filename'),
+            'current_file_display': audio_item.get('filename_display'),
+            'current_cover': audio_item.get('cover'),
             'current_title': audio_item.get('title'),
             'current_artist': audio_item.get('artist'),
             'current_album': audio_item.get('album'),
@@ -2012,15 +1945,22 @@ def handle_previous_song(data):
             'is_playing': auto_play,
             'last_progress_s': 0,
             'last_updated_at': time.time(),
+            'current_proxy_id': audio_item.get('proxy_id'),
+            'current_is_stream': audio_item.get('is_stream', False),
+            'current_image_url': audio_item.get('image_url')
         })
 
     emit_data = {
-        'filename': audio_item['filename'],
-        'filename_display': audio_item['filename_display'],
-        'cover': audio_item['cover'],
+        'filename': audio_item.get('filename'),
+        'filename_display': audio_item.get('filename_display'),
+        'cover': audio_item.get('cover'),
         'title': audio_item.get('title'),
         'artist': audio_item.get('artist'),
-        'album': audio_item.get('album')
+        'album': audio_item.get('album'),
+        'proxy_id': audio_item.get('proxy_id'),
+        'is_stream': audio_item.get('is_stream', False),
+        'image_url': audio_item.get('image_url'),
+        'video_id': audio_item.get('video_id')
     }
     socketio.emit('new_file', emit_data, to=room)
 
