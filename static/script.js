@@ -4580,6 +4580,7 @@ document.addEventListener('fullscreenchange', () => {
     const searchModal = document.getElementById('search-modal');
     const searchResults = document.getElementById('search-results');
     const closeSearch = document.getElementById('close-search');
+    const JIOSAAVN_SEARCH_PREFIX = 'js:'; // Prefix to route search to JioSaavn
 
     if (searchInput && searchBtn && searchModal && searchResults) {
         // --- Comprehensive Search Safeguards ---
@@ -4608,13 +4609,50 @@ document.addEventListener('fullscreenchange', () => {
         function closeSearchModal() { searchModal.style.display = 'none'; }
 
         async function doSearch(q) {
-            const trimmedQuery = q.trim();
-            if (trimmedQuery.length === 0) return;
+            const raw = q.trim();
+            if (!raw) return;
+            const isJio = raw.toLowerCase().startsWith(JIOSAAVN_SEARCH_PREFIX);
+            const coreQuery = isJio ? raw.slice(JIOSAAVN_SEARCH_PREFIX.length).trim() : raw;
+            if (!coreQuery) return;
 
             searchResults.innerHTML = '<p class="loading-members">Searching...</p>';
 
             try {
-                const res = await fetch(`/search_ytmusic?q=${encodeURIComponent(trimmedQuery)}`);
+                if (isJio) {
+                    const res = await fetch(`/search_jiosaavn?q=${encodeURIComponent(coreQuery)}`);
+                    const data = await res.json();
+                    if (!data.success || !data.results || data.results.length === 0) {
+                        searchResults.innerHTML = `<p class="no-members">${data.error || 'No JioSaavn results'}</p>`;
+                        return;
+                    }
+                    let html = '';
+                    data.results.forEach((song, idx) => {
+                        html += `
+                        <div class="search-result-item" style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.1);">
+                            <img src="${song.image || ''}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;display:${song.image ? 'block' : 'none'}" />
+                            <div style="flex:1;min-width:0;">
+                                <div style="font-weight:600;font-size:0.95rem;margin-bottom:2px;">${song.title || 'Unknown'}</div>
+                                <div style="color:rgba(255,255,255,0.7);font-size:0.85rem;">${song.artist || 'Unknown Artist'}</div>
+                            </div>
+                            <button class="add-jio-btn control-button" data-index="${idx}">Add</button>
+                        </div>`;
+                    });
+                    searchResults.innerHTML = html;
+                    document.querySelectorAll('.add-jio-btn').forEach(btn => {
+                        btn.addEventListener('click', async (e) => {
+                            const button = e.currentTarget;
+                            const index = parseInt(button.getAttribute('data-index'));
+                            const song = data.results[index];
+                            button.textContent = 'Processing...';
+                            button.disabled = true;
+                            await addJioSaavnSong(button, song);
+                        });
+                    });
+                    return; // Done Jio path
+                }
+
+                // --- YouTube Music path (unchanged) ---
+                const res = await fetch(`/search_ytmusic?q=${encodeURIComponent(coreQuery)}`);
                 const data = await res.json();
 
                 if (!data.success || !data.results || data.results.length === 0) {
@@ -4625,7 +4663,6 @@ document.addEventListener('fullscreenchange', () => {
                 let html = '';
                 data.results.forEach((result, index) => {
                     const md = result.metadata || {};
-                    const duration = md.duration ? formatDuration(md.duration) : '';
                     html += `
                         <div class="search-result-item" style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.1);">
                             <img src="${md.image_url || ''}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;display:${md.image_url ? 'block' : 'none'}" />
@@ -4638,23 +4675,61 @@ document.addEventListener('fullscreenchange', () => {
                 });
                 searchResults.innerHTML = html;
 
-                // Add event listeners for the new buttons
                 document.querySelectorAll('.add-via-client-btn').forEach(btn => {
                     btn.addEventListener('click', async (e) => {
-                        const button = e.target;
+                        const button = e.currentTarget;
                         const index = parseInt(button.getAttribute('data-index'));
                         const result = data.results[index];
-
                         button.textContent = 'Processing...';
                         button.disabled = true;
-
                         await addSongViaClient(result, button);
                     });
                 });
-
             } catch (err) {
                 console.error('Search fetch error:', err);
                 searchResults.innerHTML = '<p class="no-members">An error occurred during search.</p>';
+            }
+        }
+
+        async function addJioSaavnSong(buttonEl, song) {
+            if (!roomId) return;
+            const original = buttonEl.textContent;
+            try {
+                buttonEl.textContent = 'Resolving...';
+                const qualities = ['320kbps','160kbps','128kbps'];
+                let resolved = null;
+                for (const q of qualities) {
+                    const r = await fetch(`/resolve_jiosaavn?id=${encodeURIComponent(song.id)}&quality=${q}&register=1`);
+                    const data = await r.json();
+                    if (data.success && data.media_url) { resolved = { q, data }; break; }
+                }
+                if (!resolved) throw new Error('Resolve failed');
+                buttonEl.textContent = 'Queuing...';
+                const meta = {
+                    title: song.title,
+                    artist: song.artist,
+                    album: song.album,
+                    image: song.image,
+                    image_url: song.image
+                };
+                const addResp = await fetch('/add_to_queue', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ room: roomId, proxy_id: resolved.data.proxy_id, metadata: meta, video_id: null })
+                });
+                const addData = await addResp.json();
+                if (!addResp.ok || !addData.success) throw new Error(addData.error || 'Queue failed');
+                buttonEl.textContent = 'Added';
+                buttonEl.classList.add('added');
+            } catch (e) {
+                console.error(e);
+                buttonEl.textContent = 'Error';
+                buttonEl.classList.add('error');
+            } finally {
+                setTimeout(() => {
+                    if (!buttonEl.classList.contains('added')) buttonEl.textContent = original;
+                    buttonEl.disabled = false;
+                }, 2500);
             }
         }
 
