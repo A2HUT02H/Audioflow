@@ -33,6 +33,12 @@ import concurrent.futures
 from PIL import Image
 import io
 from ytmusicapi import YTMusic
+import base64
+import json
+try:
+    from Crypto.Cipher import AES
+except ImportError:
+    AES = None
 # --- Configure optimized HTTP session for downloads ---
 def create_download_session():
     """Create an optimized requests session for downloads."""
@@ -927,6 +933,466 @@ def search_ytmusic():
     except Exception as e:
         print(f"Error querying YouTube Music API: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==================================================================
+# JioSaavn integration (unofficial)
+# ==================================================================
+
+JIOSAAVN_BASE = 'https://www.jiosaavn.com'
+JIOSAAVN_API = 'https://www.jiosaavn.com/api.php'
+
+def _jio_headers():
+    return {
+        'User-Agent': download_session.headers.get('User-Agent'),
+        'Accept': 'application/json, text/plain,*/*',
+        'Referer': 'https://www.jiosaavn.com/',
+        'Origin': 'https://www.jiosaavn.com'
+    }
+
+def _upgrade_image_quality(image_url):
+    """Upgrade JioSaavn image quality to highest available resolution"""
+    if not image_url:
+        return image_url
+    
+    # Upgrade to 500x500 (highest confirmed quality supported by JioSaavn)
+    # Handle different patterns that JioSaavn uses
+    for old_size in ["50x50", "150x150", "300x300"]:
+        if old_size in image_url:
+            image_url = image_url.replace(old_size, "500x500")
+            break
+    
+    return image_url
+
+def _decrypt_jiosaavn_url(encrypted_url: str) -> str:
+    """Decrypt JioSaavn URL using DES encryption like vendz/jiosaavn-api"""
+    if not encrypted_url:
+        return encrypted_url
+    if encrypted_url.startswith('http://') or encrypted_url.startswith('https://'):
+        return encrypted_url
+    
+    try:
+        # Use DES encryption like vendz repo
+        from pyDes import des, ECB, PAD_PKCS5
+        import base64
+        
+        des_cipher = des(b"38346591", ECB, b"\0\0\0\0\0\0\0\0", pad=None, padmode=PAD_PKCS5)
+        enc_url = base64.b64decode(encrypted_url.strip())
+        dec_url = des_cipher.decrypt(enc_url, padmode=PAD_PKCS5).decode('utf-8')
+        # Replace 96kbps with 320kbps like vendz
+        dec_url = dec_url.replace("_96.mp4", "_320.mp4")
+        return dec_url
+    except Exception as e:
+        print(f"[DEBUG] DES decryption failed: {e}")
+        # Fallback to original approach if DES fails
+        try:
+            b = base64.b64decode(encrypted_url)
+            if b and AES:
+                key = b"38346591b33b8f58"  # 16 bytes
+                cipher = AES.new(key, AES.MODE_ECB)
+                decrypted = cipher.decrypt(b)
+                pad_len = decrypted[-1]
+                if isinstance(pad_len, int) and 1 <= pad_len <= 16:
+                    decrypted = decrypted[:-pad_len]
+                url = decrypted.decode('utf-8', errors='ignore').strip('\x00')
+                if url.startswith('http'):
+                    return url
+        except Exception:
+            pass
+        # Final fallback: simple base64 -> text
+        try:
+            decoded = base64.b64decode(encrypted_url).decode('utf-8', errors='ignore')
+            if decoded.startswith('http'):
+                return decoded
+        except Exception:
+            pass
+    
+    return encrypted_url
+
+def _pick_jiosaavn_media(song_obj: dict, preferred=['320kbps','160kbps','128kbps']):
+    """Pick best media URL using vendz approach with proper fallbacks"""
+    # Try encrypted_media_url first (most reliable)
+    if song_obj.get('encrypted_media_url'):
+        decrypted_url = _decrypt_jiosaavn_url(song_obj['encrypted_media_url'])
+        if decrypted_url and decrypted_url.startswith('http'):
+            return decrypted_url
+    
+    # Try media_preview_url with vendz format logic
+    media_url = song_obj.get('media_preview_url')
+    if media_url:
+        try:
+            # Use vendz approach: replace preview with aac, then build quality variants
+            song_url = media_url.replace('preview', 'aac')
+            song_url = song_url.replace('_96_p.mp4', '_96.mp4')
+            
+            # Build quality variants like vendz
+            if '320kbps' in preferred and song_obj.get('320kbps') == 'true':
+                song_url_320 = song_url.replace('_96.mp4', '_320.mp4')
+                return song_url_320
+            elif '160kbps' in preferred:
+                song_url_160 = song_url.replace('_96.mp4', '_160.mp4')
+                return song_url_160
+            else:
+                return song_url
+        except Exception:
+            pass
+    
+    # Try direct media_url field
+    if song_obj.get('media_url'):
+        media_url = song_obj['media_url']
+        if media_url.startswith('http'):
+            return media_url
+        else:
+            # Try to decrypt if it looks encrypted
+            decrypted = _decrypt_jiosaavn_url(media_url)
+            if decrypted and decrypted.startswith('http'):
+                return decrypted
+    
+    return None
+
+@app.route('/search_jiosaavn')
+def search_jiosaavn():
+    """Search songs on JioSaavn using autocomplete.get like vendz/jiosaavn-api"""
+    q = request.args.get('q')
+    if not q:
+        return jsonify({'success': False, 'error': 'q parameter required'}), 400
+    
+    # Use vendz autocomplete.get endpoint for consistency
+    params = {
+        '__call': 'autocomplete.get',
+        'query': q,
+        '_format': 'json',
+        '_marker': '0',
+        'cc': 'in',
+        'includeMetaTags': '1'
+    }
+    try:
+        r = download_session.get(JIOSAAVN_API, params=params, headers=_jio_headers(), timeout=10)
+        if r.status_code != 200:
+            return jsonify({'success': False, 'error': f'upstream {r.status_code}'}), 502
+        
+        # Try multiple JSON parsing approaches for robustness
+        data = None
+        
+        # First try: Parse as-is (sometimes works)
+        try:
+            data = r.json()
+        except json.JSONDecodeError:
+            pass
+        
+        # Second try: Decode unicode escapes like vendz (most common)
+        if not data:
+            try:
+                text_data = r.text.encode().decode('unicode-escape')
+                data = json.loads(text_data)
+            except json.JSONDecodeError:
+                pass
+        
+        # Third try: Clean problematic characters before parsing
+        if not data:
+            try:
+                # Clean the text by fixing common JSON issues
+                cleaned_text = r.text
+                # Replace problematic escape sequences
+                cleaned_text = cleaned_text.replace('\\"', '"')
+                cleaned_text = cleaned_text.replace('\\/', '/')
+                # Try to parse cleaned text
+                data = json.loads(cleaned_text)
+            except json.JSONDecodeError:
+                pass
+        
+        # Fourth try: Use regex to extract valid JSON structure
+        if not data:
+            try:
+                import re
+                # Extract the main JSON structure
+                match = re.search(r'\{.*\}', r.text, re.DOTALL)
+                if match:
+                    json_text = match.group(0)
+                    data = json.loads(json_text)
+            except (json.JSONDecodeError, AttributeError):
+                pass
+        
+        if not data:
+            print(f"[DEBUG] JioSaavn JSON parsing failed for query: {q}")
+            print(f"[DEBUG] Response text preview: {r.text[:200]}...")
+            return jsonify({'success': False, 'error': 'failed to parse response'}), 502
+        
+        songs = data.get('songs', {}).get('data', [])
+        results = []
+        for s in songs[:12]:
+            # Format like vendz approach
+            more_info = s.get('more_info', {})
+            results.append({
+                'id': s.get('id'),
+                'title': s.get('title') or s.get('song'),
+                'artist': (more_info.get('primary_artists') or 
+                          more_info.get('singers') or 
+                          s.get('primary_artists') or 
+                          s.get('singers') or 
+                          s.get('music')),
+                'album': s.get('album'),
+                'image': _upgrade_image_quality(s.get('image') or ''),
+                'duration': s.get('duration', '0'),
+                'language': more_info.get('language') or s.get('language'),
+                'encrypted_media_url': s.get('encrypted_media_url'),
+                'media_preview_url': s.get('media_preview_url'),
+                'has_lyrics': s.get('has_lyrics', 'false'),
+                '320kbps': s.get('320kbps', 'false')
+            })
+        return jsonify({'success': True, 'results': results, 'total': len(results)})
+    except Exception as e:
+        print(f"[DEBUG] JioSaavn search error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/resolve_jiosaavn')
+def resolve_jiosaavn():
+    """Resolve a JioSaavn song id to a direct audio URL (not proxied yet).
+    Query params: id, quality(optional: 320kbps|160kbps|128kbps)
+    Returns: metadata + (optional) proxy_id if register=1 provided.
+    """
+    song_id = request.args.get('id')
+    encrypted_override = request.args.get('encrypted_media_url')
+    preview_override = request.args.get('media_preview_url')
+    if not song_id and not encrypted_override and not preview_override:
+        return jsonify({'success': False, 'error': 'id or media url param required'}), 400
+    quality = request.args.get('quality') or '320kbps'
+    register_flag = request.args.get('register') == '1'
+    params = None
+    if song_id:
+        params = {
+            '__call': 'song.getDetails',
+            'pids': song_id,
+            '_format': 'json',
+            '_marker': '0'
+        }
+    try:
+        song = None
+        if params:
+            r = download_session.get(JIOSAAVN_API, params=params, headers=_jio_headers(), timeout=10)
+            if r.status_code == 200:
+                # Try multiple JSON parsing approaches for robustness
+                data = None
+                
+                # First try: Parse as-is
+                try:
+                    data = r.json()
+                except json.JSONDecodeError:
+                    pass
+                
+                # Second try: Decode unicode escapes like vendz
+                if not data:
+                    try:
+                        text_data = r.text.encode().decode('unicode-escape')
+                        data = json.loads(text_data)
+                    except json.JSONDecodeError:
+                        pass
+                
+                # Third try: Clean problematic characters
+                if not data:
+                    try:
+                        cleaned_text = r.text.replace('\\"', '"').replace('\\/', '/')
+                        data = json.loads(cleaned_text)
+                    except json.JSONDecodeError:
+                        print(f"[DEBUG] JioSaavn resolve JSON parsing failed for song_id: {song_id}")
+                        print(f"[DEBUG] Response preview: {r.text[:200]}...")
+                
+                # song.getDetails returns {song_id: song_data}, not {songs: [song_data]}
+                if data and song_id in data:
+                    song = data[song_id]
+            else:
+                print(f"[DEBUG] song.getDetails upstream status {r.status_code}, will fallback to provided urls if any")
+        # Build a synthetic song dict if API failed but overrides provided
+        if not song and (encrypted_override or preview_override):
+            song = {
+                'title': None,
+                'album': None,
+                'image': None,
+                'more_info': {
+                    'primary_artists': None,
+                    'encrypted_media_url': encrypted_override
+                },
+                'media_url': encrypted_override,
+                'media_preview_url': preview_override
+            }
+        if not song:
+            return jsonify({'success': False, 'error': 'song not found'}), 404
+        tried = [quality, '320kbps', '160kbps', '128kbps']
+        ordered = []
+        for q in tried:
+            if q not in ordered:
+                ordered.append(q)
+        media_url = None
+        selected_quality = None
+        for q in ordered:
+            candidate = _pick_jiosaavn_media(song, [q])
+            if candidate and candidate.startswith('http'):
+                media_url = candidate
+                selected_quality = q
+                break
+        if not media_url:
+            return jsonify({'success': False, 'error': 'Could not derive media url'}), 500
+        proxy_id = None
+        if register_flag:
+            proxy_id = add_proxy_url(media_url)
+        meta = {
+            'title': song.get('title'),
+            'artist': (song.get('more_info', {}).get('primary_artists') or 
+                      song.get('more_info', {}).get('singers') or
+                      song.get('primary_artists') or 
+                      song.get('singers') or 
+                      song.get('music')),
+            'album': song.get('album'),
+            'image': _upgrade_image_quality(song.get('image')),
+            'language': song.get('language'),
+            'year': song.get('year')
+        }
+        return jsonify({'success': True, 'media_url': media_url, 'proxy_id': proxy_id, 'quality': selected_quality, 'metadata': meta})
+    except Exception as e:
+        print(f"[DEBUG] JioSaavn resolve error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+# Universal endpoint like vendz/jiosaavn-api
+@app.route('/result')
+def universal_result():
+    """Universal endpoint supporting song name, song link, album link, playlist link like vendz"""
+    query = request.args.get('query', '').strip()
+    lyrics = request.args.get('lyrics', 'false').lower() == 'true'
+    
+    if not query:
+        return jsonify({'success': False, 'message': 'You need to enter a query', 'data': []})
+    
+    try:
+        # Check if it's a JioSaavn URL
+        if query.startswith('http') and 'saavn.com' in query:
+            # For URLs, we'd need to extract song ID and use song.getDetails
+            # This is a simplified version - full implementation would parse all URL types
+            return jsonify({'success': False, 'message': 'URL parsing not yet implemented', 'data': []})
+        else:
+            # Treat as search query using autocomplete.get like vendz
+            params = {
+                '__call': 'autocomplete.get',
+                'query': query,
+                '_format': 'json',
+                '_marker': '0',
+                'cc': 'in',
+                'includeMetaTags': '1'
+            }
+            
+            r = download_session.get(JIOSAAVN_API, params=params, headers=_jio_headers(), timeout=10)
+            if r.status_code != 200:
+                return jsonify({'success': False, 'message': f'upstream {r.status_code}', 'data': []})
+            
+            # Try multiple JSON parsing approaches for robustness
+            data = None
+            
+            # First try: Parse as-is
+            try:
+                data = r.json()
+            except json.JSONDecodeError:
+                pass
+            
+            # Second try: Decode unicode escapes like vendz
+            if not data:
+                try:
+                    text_data = r.text.encode().decode('unicode-escape')
+                    data = json.loads(text_data)
+                except json.JSONDecodeError:
+                    pass
+            
+            # Third try: Clean problematic characters
+            if not data:
+                try:
+                    cleaned_text = r.text.replace('\\"', '"').replace('\\/', '/')
+                    data = json.loads(cleaned_text)
+                except json.JSONDecodeError:
+                    print(f"[DEBUG] Universal endpoint JSON parsing failed for query: {query}")
+                    return jsonify({'success': False, 'message': 'failed to parse response', 'data': []})
+            
+            songs = data.get('songs', {}).get('data', [])
+            results = []
+            
+            for s in songs:
+                # Get song details to have full metadata like vendz format_song
+                song_id = s.get('id')
+                if song_id:
+                    try:
+                        details_params = {
+                            '__call': 'song.getDetails',
+                            'pids': song_id,
+                            '_format': 'json',
+                            '_marker': '0'
+                        }
+                        detail_r = download_session.get(JIOSAAVN_API, params=details_params, headers=_jio_headers(), timeout=5)
+                        if detail_r.status_code == 200:
+                            detail_text = detail_r.text.encode().decode('unicode-escape')
+                            detail_data = json.loads(detail_text)
+                            songs_list = detail_data.get('songs', [])
+                            if songs_list:
+                                song_detail = songs_list[0]
+                                # Format like vendz with full metadata
+                                formatted_song = {
+                                    'id': song_detail.get('id'),
+                                    'title': song_detail.get('title') or song_detail.get('song'),
+                                    'album': song_detail.get('album'),
+                                    'year': song_detail.get('year'),
+                                    'duration': song_detail.get('duration', '0'),
+                                    'language': song_detail.get('language'),
+                                    'has_lyrics': song_detail.get('has_lyrics', 'false'),
+                                    'singers': song_detail.get('singers', '').split(', ') if song_detail.get('singers') else [],
+                                    'primary_artists': song_detail.get('primary_artists'),
+                                    'image': _upgrade_image_quality(song_detail.get('image') or ''),
+                                    '320kbps': song_detail.get('320kbps', 'false'),
+                                    'encrypted_media_url': song_detail.get('encrypted_media_url'),
+                                    'media_preview_url': song_detail.get('media_preview_url')
+                                }
+                                
+                                # Try to get direct download URL
+                                media_url = _pick_jiosaavn_media(song_detail, ['320kbps', '160kbps', '128kbps'])
+                                if media_url:
+                                    formatted_song['url'] = media_url
+                                
+                                # Add lyrics if requested
+                                if lyrics and song_detail.get('has_lyrics') == 'true':
+                                    try:
+                                        lyrics_params = {
+                                            '__call': 'lyrics.getLyrics',
+                                            'lyrics_id': song_id,
+                                            '_format': 'json',
+                                            '_marker': '0',
+                                            'ctx': 'web6dot0',
+                                            'api_version': '4'
+                                        }
+                                        lyrics_r = download_session.get(JIOSAAVN_API, params=lyrics_params, headers=_jio_headers(), timeout=5)
+                                        if lyrics_r.status_code == 200:
+                                            lyrics_data = lyrics_r.json()
+                                            formatted_song['lyrics'] = lyrics_data.get('lyrics', '')
+                                    except:
+                                        pass
+                                
+                                results.append(formatted_song)
+                    except:
+                        # If details failed, use basic search result
+                        results.append({
+                            'id': s.get('id'),
+                            'title': s.get('title') or s.get('song'),
+                            'album': s.get('album'),
+                            'singers': [],
+                            'primary_artists': s.get('primary_artists'),
+                            'image': _upgrade_image_quality(s.get('image') or ''),
+                            'duration': s.get('duration', '0'),
+                            'language': s.get('language'),
+                        })
+            
+            return jsonify({
+                'success': True,
+                'data': results,
+                'query': query
+            })
+    
+    except Exception as e:
+        print(f"[DEBUG] Universal result error: {e}")
+        return jsonify({'success': False, 'message': str(e), 'data': []})
 
 
 @app.route('/stream_proxy/<proxy_id>')
