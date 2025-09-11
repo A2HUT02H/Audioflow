@@ -12,3 +12,4 @@ ytmusicapi
 yt-dlp
 Pillow
 numpy
+pyDes
