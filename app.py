@@ -1058,12 +1058,13 @@ def search_jiosaavn():
         return jsonify({'success': False, 'error': 'q parameter required'}), 400
     
     # Use vendz autocomplete.get endpoint for consistency
+    # Remove 'cc': 'in' restriction to allow international content
     params = {
         '__call': 'autocomplete.get',
         'query': q,
         '_format': 'json',
         '_marker': '0',
-        'cc': 'in',
+        'ctx': 'web6dot0',
         'includeMetaTags': '1'
     }
     try:
@@ -1270,12 +1271,13 @@ def universal_result():
             return jsonify({'success': False, 'message': 'URL parsing not yet implemented', 'data': []})
         else:
             # Treat as search query using autocomplete.get like vendz
+            # Remove 'cc': 'in' restriction to allow international content
             params = {
                 '__call': 'autocomplete.get',
                 'query': query,
                 '_format': 'json',
                 '_marker': '0',
-                'cc': 'in',
+                'ctx': 'web6dot0',
                 'includeMetaTags': '1'
             }
             
