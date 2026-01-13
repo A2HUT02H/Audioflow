@@ -22,6 +22,22 @@
             <p class="no-lyrics">No lyrics available</p>
         </div>
     </div>
+
+    <!-- Members Sidebar (Always Visible - Left Side) -->
+    <div class="members-sidebar" id="members-sidebar">
+        <div class="members-sidebar-header">
+            <h3><i class="fa-solid fa-user-group"></i> Members</h3>
+        </div>
+        <div class="members-sidebar-body" id="members-sidebar-list">
+            <p class="loading-members">Loading members...</p>
+        </div>
+        <div class="sidebar-upload-wrapper">
+            <button id="upload-btn" class="control-button sidebar-upload-btn">
+                <i class="fas fa-upload"></i> Upload
+            </button>
+            <input type="file" id="audio-input" accept=".mp3,.wav,.ogg,.flac,.m4a" style="display: none;">
+        </div>
+    </div>
     
     <style>
       body {
@@ -34,45 +50,95 @@
         position: relative;
       }
     </style>
+
+    <!-- Drag and Drop Overlay -->
+    <div class="drag-drop-overlay" id="drag-drop-overlay">
+        <div class="drag-drop-content">
+            <i class="fas fa-cloud-upload-alt drag-drop-icon"></i>
+            <div class="drag-drop-text">Drop your music files here</div>
+            <div class="drag-drop-hint">Supports MP3, WAV, FLAC, OGG, M4A</div>
+        </div>
+    </div>
+
+    <!-- Fullscreen Idle Song Info Display -->
+    <div class="fullscreen-song-info" id="fullscreen-song-info">
+        <div class="fullscreen-song-title" id="fullscreen-song-title"></div>
+        <div class="fullscreen-song-artist" id="fullscreen-song-artist"></div>
+    </div>
+
     <div class="container">
         <header class="main-header">
             <h1 class="main-heading">AudioFlow</h1>
-            <div class="room-header-controls" style="display: flex; align-items: center; justify-content: center; gap: 10px;">
-                <span class="member-count"><i class="fa-solid fa-user-group"></i> {{ member_count if member_count is defined else 1 }}</span>
-                <div class="room-code-display">Room code: <span>{{ room_id }}</span></div>
-                <a href="{{ url_for('create_room') }}" class="create-new-room-button" title="Create New Room" style="margin-left: 10px;">+</a>
-                <a href="/" class="exit-room-button" title="Exit Room" style="margin-left: 5px;"><i class="fas fa-sign-out-alt"></i></a>
+            <div class="room-header-controls">
+                <div class="room-code-display">Room: <span>{{ room_id }}</span></div>
+                <button id="members-badge-btn" class="members-badge-btn" data-tooltip="Members">
+                    <i class="fa-solid fa-user-group"></i>
+                    <span class="members-badge-count" id="members-badge-count">0</span>
+                </button>
+                <a href="{{ url_for('create_room') }}" class="create-new-room-button" data-tooltip="Create New Room"><i class="fas fa-plus"></i></a>
+                <button class="control-button header-btn mobile-only" id="header-sync-btn" title="Sync" data-tooltip="Sync"><i class="fas fa-sync-alt"></i></button>
+                <a href="/" class="exit-room-button" data-tooltip="Exit Room"><i class="fas fa-sign-out-alt"></i></a>
+                <button class="control-button header-btn header-fullscreen-btn mobile-only" id="header-fullscreen-btn" title="Toggle Fullscreen" data-tooltip="Fullscreen"><i class="fa-solid fa-up-right-and-down-left-from-center"></i></button>
             </div>
         </header>
 
-        <!-- Search Section -->
-        <div class="search-section">
-            <form id="search-form" style="display:flex;align-items:center;justify-content:center;gap:8px;max-width:400px;margin:0 auto;" onsubmit="event.preventDefault(); return false;">
-                <input id="search-input" type="text" placeholder="Search for music..." value="" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" style="flex:1;padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.1);color:inherit;backdrop-filter:blur(10px);" />
-                <button id="search-btn" type="button" class="control-button" title="Search" style="padding:8px 12px;">
-                    <i class="fas fa-search"></i>
+        <!-- Scrollable Content Area -->
+        <div class="container-scroll-area">
+            <!-- Search Section -->
+            <div class="search-section" style="display: flex; align-items: center; justify-content: center; gap: 10px;">
+                <form id="search-form" class="search-form" onsubmit="event.preventDefault(); return false;" style="flex: 1; max-width: 600px; margin: 0;">
+                    <div class="search-input-wrapper">
+                        <i class="fas fa-search search-icon"></i>
+                        <input id="search-input" type="text" placeholder="Search for music..." value="" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" class="search-input" />
+                        <button id="search-btn" type="button" class="search-btn" title="Search">
+                            <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </form>
+                <button class="control-button player-btn desktop-only" id="queue-btn" title="Queue">
+                    <i class="fas fa-list"></i>
+                    <span class="queue-badge" id="queue-count">0</span>
                 </button>
-            </form>
+            </div>
+
+            <!-- Music Library Grid -->
+            <div class="music-grid" id="music-grid">
+                <!-- Music items will be dynamically added here -->
+                <div class="music-grid-empty">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                    <p>No music uploaded yet</p>
+                    <p class="music-grid-hint">Drag & drop files or click upload button</p>
+                </div>
+            </div>
+
+            <!-- Queue View (Hidden by default) -->
+            <div class="queue-view" id="queue-view" style="display: none;">
+                <div id="queue-list" class="queue-list">
+                    <!-- Queue items injected here -->
+                </div>
+            </div>
         </div>
 
-        <div class="cover-section">
-            <div class="cover-dancing-bars left">
-                <span class="bar"></span>
-                <span class="bar"></span>
-                <span class="bar"></span>
+        <!-- Now Playing Section (Hidden by default, shown when playing) -->
+        <div class="now-playing-section" id="now-playing-section" style="display: none;">
+            <div class="cover-section">
+                <div class="cover-dancing-bars left">
+                    <span class="bar"></span>
+                    <span class="bar"></span>
+                    <span class="bar"></span>
+                </div>
+                <img id="cover-art" src="" alt="Cover Art" style="display:none;" />
+                <div class="cover-art-placeholder" id="cover-art-placeholder">
+                    <!-- Music note icon will be added via CSS -->
+                </div>
+                <div class="cover-dancing-bars right">
+                    <span class="bar"></span>
+                    <span class="bar"></span>
+                    <span class="bar"></span>
+                </div>
             </div>
-            <img id="cover-art" src="" alt="Cover Art" style="display:none;" />
-            <div class="cover-art-placeholder" id="cover-art-placeholder">
-                <!-- Music note icon will be added via CSS -->
-            </div>
-            <div class="cover-dancing-bars right">
-                <span class="bar"></span>
-                <span class="bar"></span>
-                <span class="bar"></span>
-            </div>
-        </div>
 
-        <div id="file-name" class="file-status">
+            <div id="file-name" class="file-status">
             <div id="song-title">No file selected</div>
             <div id="song-artist"></div>
             <script>
@@ -131,110 +197,16 @@
             window.addEventListener('resize', updateFileNameAnimation);
             // This function is now called from script.js on player state changes
             </script>
+            </div>
         </div>
 
         <audio id="player" preload="auto" style="display: none;">
             Your browser does not support the audio element.
         </audio>
 
-        <!-- Custom Audio Player Controls -->
-        <div class="custom-player">
-            <!-- Time display row -->
-            <div class="player-time-display">
-                <span id="current-time">0:00</span>
-                <span id="total-time">0:00</span>
-            </div>
-            
-            <!-- Progress bar row -->
-            <div class="progress-bar-container">
-                <div class="progress-bar">
-                    <div class="progress-fill" id="progress-fill"></div>
-                    <div class="progress-handle" id="progress-handle"></div>
-                </div>
-            </div>
-            
-            <!-- Main playback controls row -->
-            <div class="main-player-row">
-                <button class="control-button player-btn" id="shuffle-btn" title="Shuffle">
-                    <i class="fas fa-shuffle" id="shuffle-icon"></i>
-                </button>
-                
-                <button class="control-button player-btn" id="prev-btn" title="Previous Song">
-                    <i class="fas fa-step-backward"></i>
-                </button>
-                
-                <button class="control-button player-btn play-btn-large" id="play-pause-btn">
-                    <i class="fas fa-play" id="play-pause-icon"></i>
-                </button>
-                
-                <button class="control-button player-btn" id="next-btn" title="Next Song">
-                    <i class="fas fa-step-forward"></i>
-                </button>
-                
-                <button class="control-button player-btn" id="loop-btn" title="Loop">
-                    <i class="fas fa-repeat" id="loop-icon"></i>
-                </button>
-                
-                <button class="control-button player-btn" id="lyrics-toggle-btn" title="Toggle Lyrics">
-                    <i class="fas fa-music"></i>
-                </button>
-                
-                <div class="volume-control">
-                    <button class="control-button volume-btn" id="volume-btn"> 
-                        <i class="fas fa-volume-up" id="volume-icon"></i>
-                    </button>
-                    <div class="volume-popup" id="volume-popup">
-                        <div class="volume-slider-vertical">
-                            <div class="volume-fill-vertical" id="volume-fill-vertical"></div>
-                            <div class="volume-handle-vertical" id="volume-handle-vertical"></div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="controls-section">
-            <div class="upload-wrapper">
-                <button id="upload-btn" class="control-button">
-                    <i class="fas fa-upload"></i> Choose Audio
-                </button>
-                <!-- FIX: Matching the 'accept' attribute to the allowed extensions in app.py -->
-                <input type="file" id="audio-input" accept=".mp3,.wav,.ogg,.flac,.m4a" style="display: none;">
-            </div>
-
-            <div class="sync-wrapper">
-                <button id="sync-btn" class="control-button">
-                    <i class="fas fa-sync-alt"></i>Sync
-                </button>
-                <button id="queue-btn" class="control-button">
-                    <i class="fas fa-list"></i>Queue (<span id="queue-count">0</span>)
-                </button>
-                <button id="lyrics-btn" class="control-button">
-                    <i class="fas fa-music"></i>Lyrics
-                </button>
-            </div>
-        </div>
+        <!-- Controls section removed - upload moved to sidebar, sync moved to player -->
 
         <!-- Fullscreen Toggle Button (hidden by default, shown when audio is loaded) -->
-        <button id="fullscreen-btn" class="fullscreen-btn" title="Toggle fullscreen">
-            <i class="fa-solid fa-up-right-and-down-left-from-center"></i>
-        </button>
-
-        <!-- Queue Modal -->
-        <div id="queue-modal" class="queue-modal" style="display: none;">
-            <div class="queue-modal-content">
-                <div class="queue-modal-header">
-                    <h3>Queue</h3>
-                    <button id="close-queue" class="close-queue-btn">&times;</button>
-                </div>
-                <div class="queue-modal-body">
-                    <div id="queue-list" class="queue-list">
-                        <p class="empty-queue">No songs in queue</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-
         <!-- Lyrics Modal -->
         <div id="lyrics-modal" class="lyrics-modal" style="display: none;">
             <div class="lyrics-modal-content">
@@ -268,6 +240,8 @@
             </div>
         </div>
 
+        <!-- Queue Modal Removed -->
+
         <!-- Search Results Modal -->
         <div id="search-modal" class="queue-modal" style="display:none;">
             <div class="queue-modal-content" style="max-width:720px;">
@@ -281,6 +255,74 @@
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- Custom Audio Player Controls (moved outside scroll container to always overlay) -->
+    <div class="custom-player">
+        <!-- Progress bar row with time displays on sides -->
+        <div class="progress-bar-row">
+            <span id="current-time" class="time-display">0:00</span>
+            <div class="progress-bar-container">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                    <div class="progress-handle" id="progress-handle"></div>
+                </div>
+            </div>
+            <span id="total-time" class="time-display">0:00</span>
+        </div>
+        
+        <!-- Main playback controls row -->
+        <div class="main-player-row">
+            <!-- Track info moved inside main-player-row (left side) -->
+            <div class="player-track-info">
+                <img id="player-thumbnail" src="" alt="Cover" class="player-thumbnail" style="display: none;">
+                <div class="player-track-text">
+                    <div class="player-track-title" id="player-track-title">No file selected</div>
+                    <div class="player-track-artist" id="player-track-artist"></div>
+                </div>
+            </div>
+            <button class="control-button player-btn" id="shuffle-btn" title="Shuffle">
+                <i class="fas fa-shuffle" id="shuffle-icon"></i>
+            </button>
+            
+            <button class="control-button player-btn" id="prev-btn" title="Previous Song">
+                <i class="fas fa-step-backward"></i>
+            </button>
+            
+            <button class="control-button player-btn play-btn-large" id="play-pause-btn">
+                <i class="fas fa-play" id="play-pause-icon"></i>
+            </button>
+            
+            <button class="control-button player-btn" id="next-btn" title="Next Song">
+                <i class="fas fa-step-forward"></i>
+            </button>
+            
+            <button class="control-button player-btn" id="loop-btn" title="Loop">
+                <i class="fas fa-repeat" id="loop-icon"></i>
+            </button>
+            
+            <button class="control-button player-btn" id="lyrics-toggle-btn" title="Toggle Lyrics">
+                <i class="fas fa-music"></i>
+            </button>
+            
+            <div class="volume-control">
+                <button class="control-button player-btn volume-btn" id="volume-btn"> 
+                    <i class="fas fa-volume-up" id="volume-icon"></i>
+                </button>
+                <div class="volume-slider-horizontal">
+                    <div class="volume-fill-horizontal" id="volume-fill-horizontal"></div>
+                    <div class="volume-handle-horizontal" id="volume-handle-horizontal"></div>
+                </div>
+            </div>
+            
+            <button class="control-button player-btn desktop-only" id="sync-btn" title="Sync">
+                <i class="fas fa-sync-alt"></i>
+            </button>
+            
+            <button class="control-button player-btn desktop-only" id="fullscreen-btn" title="Toggle Fullscreen">
+                <i class="fa-solid fa-up-right-and-down-left-from-center" id="fullscreen-icon"></i>
+            </button>
         </div>
     </div>
 
