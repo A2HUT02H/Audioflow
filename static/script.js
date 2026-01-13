@@ -7,26 +7,26 @@ document.addEventListener('DOMContentLoaded', () => {
     const uploadBtn = document.getElementById('upload-btn');
     const syncBtn = document.getElementById('sync-btn');
     const queueBtn = document.getElementById('queue-btn');
+    const queueView = document.getElementById('queue-view');
+    const musicGrid = document.getElementById('music-grid');
     const queueCount = document.getElementById('queue-count');
-    const queueModal = document.getElementById('queue-modal');
-    const closeQueueBtn = document.getElementById('close-queue');
     const queueList = document.getElementById('queue-list');
-    const lyricsBtn = document.getElementById('lyrics-btn');
-    const lyricsToggleBtn = document.getElementById('lyrics-toggle-btn');
-    console.log('Looking for lyrics-toggle-btn:', lyricsToggleBtn);
+    const lyricsBtn = document.getElementById('lyrics-toggle-btn');
+    console.log('Looking for lyrics-toggle-btn:', lyricsBtn);
     const lyricsModal = document.getElementById('lyrics-modal');
     const closeLyricsBtn = document.getElementById('close-lyrics');
     const lyricsContent = document.getElementById('lyrics-content');
     const lyricsLoading = document.getElementById('lyrics-loading');
-    const memberCount = document.querySelector('.member-count');
-    const membersModal = document.getElementById('members-modal');
-    const closeMembersBtn = document.getElementById('close-members');
+    const membersSidebar = document.getElementById('members-sidebar');
+    const membersSidebarList = document.getElementById('members-sidebar-list');
     // membersList is now accessed dynamically in functions to avoid scope issues
     let fullscreenLyricsOverlay = document.getElementById('fullscreen-lyrics-overlay');
     let fullscreenLyricsContent = document.getElementById('fullscreen-lyrics-content');
     const fileNameDisplay = document.getElementById('file-name');
     const songTitleElement = document.getElementById('song-title');
     const songArtistElement = document.getElementById('song-artist');
+    const playerTrackTitle = document.getElementById('player-track-title');
+    const playerTrackArtist = document.getElementById('player-track-artist');
     const coverArt = document.getElementById('cover-art');
     const coverArtPlaceholder = document.getElementById('cover-art-placeholder');
     const controlButtons = document.querySelectorAll('.control-button');
@@ -40,6 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let lyricsCache = new Map(); // Cache lyrics by song key (filename + title + artist)
     let currentSongKey = null; // Current song identifier for lyrics
     let isFullscreenLyricsVisible = false; // Track fullscreen lyrics state
+    let isQueueDragging = false; // Track if queue drag is in progress (to prevent upload overlay)
 
     // Keep dancing bars inside container across devices by tying CSS vars to real cover size
     function updateCoverPositionVars() {
@@ -88,10 +89,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const progressHandle = document.getElementById('progress-handle');
     const volumeBtn = document.getElementById('volume-btn');
     const volumeIcon = document.getElementById('volume-icon');
-    const volumePopup = document.getElementById('volume-popup');
-    const volumeSliderVertical = document.querySelector('.volume-slider-vertical');
-    const volumeFillVertical = document.getElementById('volume-fill-vertical');
-    const volumeHandleVertical = document.getElementById('volume-handle-vertical');
+    const volumeSliderHorizontal = document.querySelector('.volume-slider-horizontal');
+    const volumeFillHorizontal = document.getElementById('volume-fill-horizontal');
+    const volumeHandleHorizontal = document.getElementById('volume-handle-horizontal');
 
     // --- State & Configuration ---
     const roomId = document.body.dataset.roomId;
@@ -407,11 +407,17 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Add null checks for progress elements
         if (!progressFill || !progressHandle || !currentTimeDisplay || !totalTimeDisplay) {
-            console.log('Progress bar elements not yet available');
             return;
         }
         
-        const progress = player.duration ? (player.currentTime / player.duration) * 100 : 0;
+        if (!player.duration) {
+            progressFill.style.width = '0%';
+            progressHandle.style.left = '0%';
+            currentTimeDisplay.textContent = "0:00";
+            return;
+        }
+        
+        const progress = (player.currentTime / player.duration) * 100;
         progressFill.style.width = `${progress}%`;
         progressHandle.style.left = `${progress}%`;
         
@@ -423,14 +429,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isDraggingVolume) return;
         
         // Add null checks for volume elements
-        if (!volumeFillVertical || !volumeHandleVertical || !volumeIcon) {
+        if (!volumeFillHorizontal || !volumeHandleHorizontal || !volumeIcon) {
             console.log('Volume elements not yet available');
             return;
         }
         
         const volumePercent = player.volume * 100;
-        volumeFillVertical.style.height = `${volumePercent}%`;
-        volumeHandleVertical.style.bottom = `${volumePercent}%`;
+        volumeFillHorizontal.style.width = `${volumePercent}%`;
+        volumeHandleHorizontal.style.left = `${volumePercent}%`;
         
         // Update volume icon based on volume level
         if (player.volume === 0) {
@@ -440,24 +446,6 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             volumeIcon.className = 'fas fa-volume-up';
         }
-    }
-
-    function showVolumePopup() {
-        if (!volumePopup) {
-            console.log('Volume popup element not yet available');
-            return;
-        }
-        volumePopup.style.display = 'block';
-        setTimeout(() => volumePopup.classList.add('show'), 10);
-    }
-
-    function hideVolumePopup() {
-        if (!volumePopup) {
-            console.log('Volume popup element not yet available');
-            return;
-        }
-        volumePopup.classList.remove('show');
-        setTimeout(() => volumePopup.style.display = 'none', 300);
     }
 
     function toggleMute() {
@@ -470,12 +458,6 @@ document.addEventListener('DOMContentLoaded', () => {
             player.volume = 0;
         }
         updateVolumeDisplay();
-    }
-
-    function hideVolumePopupOnClickOutside(e) {
-        if (!volumeBtn.contains(e.target) && !volumePopup.contains(e.target)) {
-            hideVolumePopup();
-        }
     }
 
     function updatePlayPauseButton() {
@@ -508,28 +490,11 @@ document.addEventListener('DOMContentLoaded', () => {
         
         if (isLooping) {
             loopBtn.classList.add('loop-active');
-            
-            // Apply dynamic color from progress bar
-            const progressFillStyle = window.getComputedStyle(progressFill);
-            const backgroundImage = progressFillStyle.backgroundImage;
-            
-            if (backgroundImage && backgroundImage !== 'none') {
-                // Extract the gradient and apply it with lower opacity for the loop button
-                const activeGradient = backgroundImage.replace(/rgba?\(([^)]+)\)/g, (match, params) => {
-                    // Parse the rgba values and reduce opacity
-                    const values = params.split(',').map(v => v.trim());
-                    if (values.length >= 3) {
-                        const alpha = values.length === 4 ? Math.min(parseFloat(values[3]) * 0.3, 0.3) : 0.3;
-                        return `rgba(${values[0]}, ${values[1]}, ${values[2]}, ${alpha})`;
-                    }
-                    return match;
-                });
-                
-                loopBtn.style.setProperty('background', activeGradient, 'important');
-            }
+            // Remove any background property to ensure no circular outline
+            loopBtn.style.removeProperty('background');
+            loopBtn.style.background = 'transparent';
         } else {
             loopBtn.classList.remove('loop-active');
-            // Remove any custom background to revert to default styling
             loopBtn.style.removeProperty('background');
         }
     }
@@ -551,28 +516,11 @@ document.addEventListener('DOMContentLoaded', () => {
         
         if (isShuffling) {
             shuffleBtn.classList.add('shuffle-active');
-            
-            // Apply dynamic color from progress bar
-            const progressFillStyle = window.getComputedStyle(progressFill);
-            const backgroundImage = progressFillStyle.backgroundImage;
-            
-            if (backgroundImage && backgroundImage !== 'none') {
-                // Extract the gradient and apply it with lower opacity for the shuffle button
-                const activeGradient = backgroundImage.replace(/rgba?\(([^)]+)\)/g, (match, params) => {
-                    // Parse the rgba values and reduce opacity
-                    const values = params.split(',').map(v => v.trim());
-                    if (values.length >= 3) {
-                        const alpha = values.length === 4 ? Math.min(parseFloat(values[3]) * 0.3, 0.3) : 0.3;
-                        return `rgba(${values[0]}, ${values[1]}, ${values[2]}, ${alpha})`;
-                    }
-                    return match;
-                });
-                
-                shuffleBtn.style.setProperty('background', activeGradient, 'important');
-            }
+            // Remove any background property to ensure no circular outline
+            shuffleBtn.style.removeProperty('background');
+            shuffleBtn.style.background = 'transparent';
         } else {
             shuffleBtn.classList.remove('shuffle-active');
-            // Remove any custom background to revert to default styling
             shuffleBtn.style.removeProperty('background');
         }
     }
@@ -590,9 +538,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleVolumeSliderClick(e) {
-        const rect = volumeSliderVertical.getBoundingClientRect();
-        const clickY = e.clientY - rect.top;
-        const volume = Math.max(0, Math.min(1, 1 - (clickY / rect.height))); // Inverted for vertical
+        const rect = volumeSliderHorizontal.getBoundingClientRect();
+        const clickX = e.clientX - rect.left;
+        const volume = Math.max(0, Math.min(1, clickX / rect.width));
         
         player.volume = volume;
         if (volume > 0) {
@@ -602,63 +550,72 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function setupProgressDragging() {
-        let startX, startProgress;
+        const progressBarContainer = progressBar.parentElement;
+
+        function updateDragPosition(e) {
+            const rect = progressBarContainer.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const progress = Math.max(0, Math.min(1, clickX / rect.width));
+            
+            const progressPercent = progress * 100;
+            progressFill.style.width = `${progressPercent}%`;
+            progressHandle.style.left = `${progressPercent}%`;
+            
+            // Update time display but NOT player.currentTime
+            if (player.duration) {
+                const newTime = progress * player.duration;
+                currentTimeDisplay.textContent = formatTime(newTime);
+            }
+        }
 
         function onMouseDown(e) {
+            if (!player.duration) return;
             isDraggingProgress = true;
-            startX = e.clientX;
-            startProgress = player.duration ? player.currentTime / player.duration : 0;
+            
+            // Disable transitions for instant feedback
+            progressFill.classList.add('dragging');
+            progressHandle.classList.add('dragging');
+            
+            // Update immediately on click
+            updateDragPosition(e);
+            
             document.addEventListener('mousemove', onMouseMove);
             document.addEventListener('mouseup', onMouseUp);
-            e.preventDefault();
+            e.preventDefault(); // Prevent text selection
         }
 
         function onMouseMove(e) {
-            if (!isDraggingProgress || !player.duration) return;
-            
-            const rect = progressBar.getBoundingClientRect();
-            const deltaX = e.clientX - startX;
-            const deltaProgress = deltaX / rect.width;
-            const newProgress = Math.max(0, Math.min(1, startProgress + deltaProgress));
-            
-            const newTime = newProgress * player.duration;
-            player.currentTime = newTime;
-            
-            const progressPercent = newProgress * 100;
-            progressFill.style.width = `${progressPercent}%`;
-            progressHandle.style.left = `${progressPercent}%`;
-            currentTimeDisplay.textContent = formatTime(newTime);
+            if (!isDraggingProgress) return;
+            updateDragPosition(e);
         }
 
-        function onMouseUp() {
+        function onMouseUp(e) {
+            if (!isDraggingProgress) return;
             isDraggingProgress = false;
+            
+            // Re-enable transitions
+            progressFill.classList.remove('dragging');
+            progressHandle.classList.remove('dragging');
+            
             document.removeEventListener('mousemove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
+            
+            // Perform the seek
+            const rect = progressBarContainer.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const progress = Math.max(0, Math.min(1, clickX / rect.width));
+            player.currentTime = progress * player.duration;
         }
 
-        progressHandle.addEventListener('mousedown', onMouseDown);
-        progressBar.addEventListener('mousedown', onMouseDown);
+        // Attach to container for larger hit area
+        progressBarContainer.addEventListener('mousedown', onMouseDown);
     }
 
     function setupVolumeDragging() {
-        let startY, startVolume;
-
-        function onMouseDown(e) {
-            isDraggingVolume = true;
-            startY = e.clientY;
-            startVolume = player.volume;
-            document.addEventListener('mousemove', onMouseMove);
-            document.addEventListener('mouseup', onMouseUp);
-            e.preventDefault();
-        }
-
-        function onMouseMove(e) {
-            if (!isDraggingVolume) return;
-            
-            const rect = volumeSliderVertical.getBoundingClientRect();
-            const deltaY = e.clientY - startY;
-            const deltaVolume = -deltaY / rect.height; // Negative because Y increases downward
-            const newVolume = Math.max(0, Math.min(1, startVolume + deltaVolume));
+        function updateVolumePosition(e) {
+            const rect = volumeSliderHorizontal.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const newVolume = Math.max(0, Math.min(1, clickX / rect.width));
             
             player.volume = newVolume;
             if (newVolume > 0) {
@@ -666,8 +623,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             
             const volumePercent = newVolume * 100;
-            volumeFillVertical.style.height = `${volumePercent}%`;
-            volumeHandleVertical.style.bottom = `${volumePercent}%`;
+            volumeFillHorizontal.style.width = `${volumePercent}%`;
+            volumeHandleHorizontal.style.left = `${volumePercent}%`;
             
             // Update volume icon
             if (newVolume === 0) {
@@ -679,14 +636,39 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
+        function onMouseDown(e) {
+            isDraggingVolume = true;
+            
+            // Disable transitions for instant feedback
+            volumeFillHorizontal.classList.add('dragging');
+            volumeHandleHorizontal.classList.add('dragging');
+            
+            // Update immediately on click
+            updateVolumePosition(e);
+            
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+            e.preventDefault();
+        }
+
+        function onMouseMove(e) {
+            if (!isDraggingVolume) return;
+            updateVolumePosition(e);
+        }
+
         function onMouseUp() {
             isDraggingVolume = false;
+            
+            // Re-enable transitions
+            volumeFillHorizontal.classList.remove('dragging');
+            volumeHandleHorizontal.classList.remove('dragging');
+            
             document.removeEventListener('mousemove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
         }
 
-        volumeHandleVertical.addEventListener('mousedown', onMouseDown);
-        volumeSliderVertical.addEventListener('mousedown', onMouseDown);
+        // Attach to container for larger hit area
+        volumeSliderHorizontal.addEventListener('mousedown', onMouseDown);
     }
 
     // Initialize custom player
@@ -695,8 +677,8 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Check if required elements exist with detailed logging
         const requiredElements = {
-            volumeFillVertical: volumeFillVertical,
-            volumeHandleVertical: volumeHandleVertical,
+            volumeFillHorizontal: volumeFillHorizontal,
+            volumeHandleHorizontal: volumeHandleHorizontal,
             volumeIcon: volumeIcon,
             playPauseBtn: playPauseBtn,
             playPauseIcon: playPauseIcon,
@@ -706,8 +688,7 @@ document.addEventListener('DOMContentLoaded', () => {
             currentTimeDisplay: currentTimeDisplay,
             totalTimeDisplay: totalTimeDisplay,
             volumeBtn: volumeBtn,
-            volumePopup: volumePopup,
-            volumeSliderVertical: volumeSliderVertical
+            volumeSliderHorizontal: volumeSliderHorizontal
         };
         
         const missingElements = [];
@@ -726,8 +707,8 @@ document.addEventListener('DOMContentLoaded', () => {
             missingElements.forEach(name => {
                 let selector;
                 switch(name) {
-                    case 'volumeFillVertical': selector = '#volume-fill-vertical'; break;
-                    case 'volumeHandleVertical': selector = '#volume-handle-vertical'; break;
+                    case 'volumeFillHorizontal': selector = '#volume-fill-horizontal'; break;
+                    case 'volumeHandleHorizontal': selector = '#volume-handle-horizontal'; break;
                     case 'volumeIcon': selector = '#volume-icon'; break;
                     case 'playPauseBtn': selector = '#play-pause-btn'; break;
                     case 'playPauseIcon': selector = '#play-pause-icon'; break;
@@ -737,8 +718,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     case 'currentTimeDisplay': selector = '#current-time'; break;
                     case 'totalTimeDisplay': selector = '#total-time'; break;
                     case 'volumeBtn': selector = '#volume-btn'; break;
-                    case 'volumePopup': selector = '#volume-popup'; break;
-                    case 'volumeSliderVertical': selector = '.volume-slider-vertical'; break;
+                    case 'volumeSliderHorizontal': selector = '.volume-slider-horizontal'; break;
                 }
                 requeried[name] = document.querySelector(selector);
                 console.log(`[DEBUG] Re-queried ${name} (${selector}):`, !!requeried[name]);
@@ -778,8 +758,13 @@ document.addEventListener('DOMContentLoaded', () => {
         updateShuffleButton();
         updateProgressBar();
 
-        // Play/Pause button
+        // Play/Pause button with pulse animation
         playPauseBtn.addEventListener('click', () => {
+            // Trigger pulse animation
+            playPauseBtn.classList.remove('playing-pulse');
+            void playPauseBtn.offsetWidth; // Force reflow
+            playPauseBtn.classList.add('playing-pulse');
+            
             if (player.paused) {
                 player.play();
             } else {
@@ -787,39 +772,34 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        // Volume button (toggle mute)
+        // Volume button: on mobile toggle slider popup; on desktop toggle mute
         volumeBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            toggleMute();
-        });
-
-        // Show volume popup on hover
-        volumeBtn.addEventListener('mouseenter', () => {
-            showVolumePopup();
-        });
-
-        // Hide volume popup when mouse leaves both button and popup
-        volumeBtn.addEventListener('mouseleave', (e) => {
-            setTimeout(() => {
-                if (!volumePopup.matches(':hover') && !volumeBtn.matches(':hover')) {
-                    hideVolumePopup();
+            const isMobile = window.innerWidth <= 600;
+            if (isMobile) {
+                // Toggle volume slider popup
+                const volumeControl = volumeBtn.closest('.volume-control');
+                if (volumeControl) {
+                    volumeControl.classList.toggle('open');
                 }
-            }, 100);
+            } else {
+                toggleMute();
+            }
         });
 
-        volumePopup.addEventListener('mouseleave', (e) => {
-            setTimeout(() => {
-                if (!volumePopup.matches(':hover') && !volumeBtn.matches(':hover')) {
-                    hideVolumePopup();
-                }
-            }, 100);
+        // Close volume popup when tapping elsewhere (mobile)
+        document.addEventListener('click', (e) => {
+            const volumeControl = document.querySelector('.volume-control.open');
+            if (volumeControl && !volumeControl.contains(e.target)) {
+                volumeControl.classList.remove('open');
+            }
         });
 
-        // Progress bar click
-        progressBar.addEventListener('click', handleProgressBarClick);
+        // Progress bar click - REMOVED: Handled by setupProgressDragging via mousedown
+        // progressBar.addEventListener('click', handleProgressBarClick);
         
-        // Volume slider click
-        volumeSliderVertical.addEventListener('click', handleVolumeSliderClick);
+        // Volume slider click - REMOVED: Handled by setupVolumeDragging via mousedown
+        // volumeSliderHorizontal.addEventListener('click', handleVolumeSliderClick);
 
         // Setup dragging
         setupProgressDragging();
@@ -838,11 +818,14 @@ document.addEventListener('DOMContentLoaded', () => {
         player.addEventListener('play', () => {
             updatePlayPauseButton();
             updateCoverPositionVars();
+            updateMusicGrid();
+            updateGridPlayingState();
         });
 
         player.addEventListener('pause', () => {
             updatePlayPauseButton();
             updateCoverPositionVars();
+            updateGridPlayingState();
         });
 
         player.addEventListener('volumechange', () => {
@@ -962,10 +945,9 @@ document.addEventListener('DOMContentLoaded', () => {
             playPauseIcon: !!document.getElementById('play-pause-icon'),
             volumeBtn: !!document.getElementById('volume-btn'),
             volumeIcon: !!document.getElementById('volume-icon'),
-            volumePopup: !!document.getElementById('volume-popup'),
-            volumeSliderVertical: !!document.querySelector('.volume-slider-vertical'),
-            volumeFillVertical: !!document.getElementById('volume-fill-vertical'),
-            volumeHandleVertical: !!document.getElementById('volume-handle-vertical'),
+            volumeSliderHorizontal: !!document.querySelector('.volume-slider-horizontal'),
+            volumeFillHorizontal: !!document.getElementById('volume-fill-horizontal'),
+            volumeHandleHorizontal: !!document.getElementById('volume-handle-horizontal'),
             progressBar: !!document.querySelector('.progress-bar'),
             progressFill: !!document.getElementById('progress-fill'),
             progressHandle: !!document.getElementById('progress-handle'),
@@ -1044,18 +1026,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(updateCoverPositionVars, 50);
     }, 100);
 
-    // Close volume popup when clicking outside
-    document.addEventListener('click', (e) => {
-        const volumePopup = document.querySelector('.volume-popup');
-        const volumeBtn = document.querySelector('.volume-btn');
-        
-        if (volumePopup && volumeBtn && 
-            !volumePopup.contains(e.target) && 
-            !volumeBtn.contains(e.target) &&
-            volumePopup.classList.contains('show')) {
-            hideVolumePopup();
-        }
-    });
+    // Volume popup handling removed (now using always-visible horizontal slider)
 
     // Keep bar alignment updated on viewport and fullscreen changes
     window.addEventListener('resize', updateCoverPositionVars);
@@ -1154,6 +1125,291 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('[DEBUG] audioInput:', audioInput);
     }
 
+    // --- Drag and Drop Upload ---
+    const dragDropOverlay = document.getElementById('drag-drop-overlay');
+    console.log('[DEBUG] Drag drop overlay found:', !!dragDropOverlay);
+    let dragCounter = 0;
+    let uploadQueue = [];
+    let isUploading = false;
+
+    // Allowed audio extensions and MIME types
+    const ALLOWED_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac', '.wma', '.aiff'];
+    const ALLOWED_MIME_TYPES = [
+        'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/wave', 'audio/x-wav',
+        'audio/ogg', 'audio/flac', 'audio/x-flac', 'audio/mp4', 'audio/x-m4a',
+        'audio/aac', 'audio/x-aac', 'audio/x-ms-wma', 'audio/aiff', 'audio/x-aiff'
+    ];
+    const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB max
+
+    function isAudioFile(file) {
+        // Check by MIME type first
+        if (file.type && ALLOWED_MIME_TYPES.some(mime => file.type.toLowerCase().includes(mime.split('/')[1]))) {
+            return true;
+        }
+        // Fallback to extension check
+        const ext = '.' + file.name.split('.').pop().toLowerCase();
+        return ALLOWED_EXTENSIONS.includes(ext);
+    }
+
+    function hasAudioFiles(dataTransfer) {
+        const types = dataTransfer && dataTransfer.types ? Array.from(dataTransfer.types) : [];
+        if (types.includes('Files')) {
+            // Check items if available (more reliable)
+            if (dataTransfer.items) {
+                for (let i = 0; i < dataTransfer.items.length; i++) {
+                    const item = dataTransfer.items[i];
+                    if (item.kind === 'file') {
+                        const file = item.getAsFile();
+                        if (file && isAudioFile(file)) return true;
+                    }
+                }
+            }
+            return true; // Assume files might be audio if we can't check
+        }
+        return false;
+    }
+
+    function handleDragEnter(e) {
+        // Only show overlay for file drops, not for internal queue reordering
+        const types = e.dataTransfer && e.dataTransfer.types ? Array.from(e.dataTransfer.types) : [];
+        
+        // Check if this is an internal queue drag using the global flag
+        // Also check if the drag originated from a queue item
+        const isQueueDrag = isQueueDragging || (e.target && (e.target.closest('.queue-item') || e.target.closest('.queue-list')));
+        
+        if (types.includes('Files') && !isQueueDrag) {
+            dragCounter++;
+            console.log('[DEBUG] Drag enter, counter:', dragCounter);
+            
+            if (dragDropOverlay && !dragDropOverlay.classList.contains('active')) {
+                dragDropOverlay.classList.add('active');
+            }
+        }
+    }
+
+    function handleDragLeave(e) {
+        dragCounter--;
+        console.log('[DEBUG] Drag leave, counter:', dragCounter);
+        
+        if (dragCounter <= 0) {
+            dragCounter = 0;
+            if (dragDropOverlay) {
+                dragDropOverlay.classList.remove('active');
+            }
+        }
+    }
+
+    function handleDragOver(e) {
+        // Set drop effect to copy
+        if (e.dataTransfer) {
+            e.dataTransfer.dropEffect = 'copy';
+        }
+    }
+
+    function handleFileDrop(e) {
+        console.log('[DEBUG] File Drop event triggered');
+        e.preventDefault();
+        e.stopPropagation();
+
+        try {
+            dragCounter = 0;
+            
+            // Force hide overlay
+            if (dragDropOverlay) {
+                dragDropOverlay.classList.remove('active');
+                console.log('[DEBUG] Overlay hidden');
+            }
+
+            const dataTransfer = e.dataTransfer;
+            console.log('[DEBUG] dataTransfer:', dataTransfer);
+            console.log('[DEBUG] files:', dataTransfer ? dataTransfer.files : 'none');
+            
+            if (!dataTransfer || !dataTransfer.files || dataTransfer.files.length === 0) {
+                console.log('[DEBUG] No files in drop event');
+                return;
+            }
+
+            const files = Array.from(dataTransfer.files);
+            console.log('[DEBUG] Dropped files:', files.map(f => `${f.name} (${f.type}, ${f.size} bytes)`));
+
+            // Filter and validate audio files
+            const validFiles = [];
+            const errors = [];
+
+            files.forEach(file => {
+                if (!isAudioFile(file)) {
+                    errors.push(`"${file.name}" is not a supported audio format`);
+                } else if (file.size > MAX_FILE_SIZE) {
+                    errors.push(`"${file.name}" exceeds 100MB limit`);
+                } else if (file.size === 0) {
+                    errors.push(`"${file.name}" is empty`);
+                } else {
+                    validFiles.push(file);
+                }
+            });
+
+            // Show errors if any
+            if (errors.length > 0 && validFiles.length === 0) {
+                console.error(errors.join('\n'));
+                return;
+            } else if (errors.length > 0) {
+                console.warn('[WARN] Some files skipped:', errors);
+            }
+
+            if (validFiles.length === 0) {
+                console.error('No valid audio files found. Supported: MP3, WAV, FLAC, OGG, M4A');
+                return;
+            }
+
+            // Add to upload queue
+            uploadQueue.push(...validFiles);
+            console.log(`Adding ${validFiles.length} file(s) to upload queue...`);
+            processUploadQueue();
+        } catch (err) {
+            console.error('[ERROR] Error in handleFileDrop:', err);
+            if (dragDropOverlay) dragDropOverlay.classList.remove('active');
+        }
+    }
+
+    function processUploadQueue() {
+        if (isUploading || uploadQueue.length === 0) return;
+        
+        isUploading = true;
+        const file = uploadQueue.shift();
+        
+        uploadFileWithProgress(file).finally(() => {
+            isUploading = false;
+            // Process next file after a small delay
+            if (uploadQueue.length > 0) {
+                setTimeout(processUploadQueue, 300);
+            }
+        });
+    }
+
+    function uploadFileWithProgress(file) {
+        return new Promise((resolve, reject) => {
+            console.log('[DEBUG] Uploading file:', file.name, 'Size:', (file.size / 1024 / 1024).toFixed(2) + 'MB');
+            
+            fileNameDisplay.classList.add('uploading');
+            const truncatedName = truncateFilename(file.name, 30);
+            const remaining = uploadQueue.length;
+            const queueText = remaining > 0 ? ` (${remaining} more in queue)` : '';
+            songTitleElement.textContent = `Uploading: ${truncatedName}${queueText}`;
+            songArtistElement.textContent = "";
+            
+            const formData = new FormData();
+            formData.append('audio', file);
+            formData.append('room', roomId);
+
+            const xhr = new XMLHttpRequest();
+            
+            // Track upload progress
+            xhr.upload.addEventListener('progress', (e) => {
+                if (e.lengthComputable) {
+                    const percent = Math.round((e.loaded / e.total) * 100);
+                    songArtistElement.textContent = `${percent}% uploaded`;
+                }
+            });
+            
+            xhr.addEventListener('load', () => {
+                fileNameDisplay.classList.remove('uploading');
+                
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try {
+                        const data = JSON.parse(xhr.responseText);
+                        if (data.success) {
+                            console.log('[DEBUG] Upload successful:', file.name);
+                            resolve(data);
+                        } else {
+                            console.error('[ERROR] Upload failed:', data.error);
+                            reject(new Error(data.error));
+                        }
+                    } catch (e) {
+                        console.error('[ERROR] Invalid response:', e);
+                        reject(e);
+                    }
+                } else {
+                    console.error('[ERROR] Upload HTTP error:', xhr.status);
+                    reject(new Error('HTTP ' + xhr.status));
+                }
+            });
+            
+            xhr.addEventListener('error', () => {
+                fileNameDisplay.classList.remove('uploading');
+                console.error('[ERROR] Upload network error');
+                reject(new Error('Network error'));
+            });
+            
+            xhr.addEventListener('abort', () => {
+                fileNameDisplay.classList.remove('uploading');
+                console.log('[DEBUG] Upload aborted:', file.name);
+                reject(new Error('Aborted'));
+            });
+            
+            xhr.open('POST', '/upload');
+            xhr.send(formData);
+        });
+    }
+
+    // Prevent default browser behavior for drag/drop on document
+    // Combined with custom handlers to avoid conflicts
+    document.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        handleDragEnter(e);
+    }, false);
+    
+    document.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        handleDragLeave(e);
+    }, false);
+    
+    document.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        handleDragOver(e);
+    }, false);
+    
+    document.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        handleFileDrop(e);
+    }, false);
+
+    // Also add listeners directly on overlay for reliability
+    if (dragDropOverlay) {
+        dragDropOverlay.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.dataTransfer) {
+                e.dataTransfer.dropEffect = 'copy';
+            }
+        }, false);
+        
+        dragDropOverlay.addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('[DEBUG] Drop on overlay');
+            handleFileDrop(e);
+        }, false);
+
+        // Click to dismiss (fallback)
+        dragDropOverlay.addEventListener('click', () => {
+            console.log('[DEBUG] Overlay clicked - dismissing');
+            dragDropOverlay.classList.remove('active');
+            dragCounter = 0;
+        });
+    }
+
+    // Reset drag counter when window loses focus (handles edge cases)
+    window.addEventListener('blur', () => {
+        dragCounter = 0;
+        if (dragDropOverlay) {
+            dragDropOverlay.classList.remove('active');
+        }
+    });
+
     if (syncBtn) {
         syncBtn.addEventListener('click', () => {
             if (!player.src || player.src.endsWith('/null')) return;
@@ -1162,125 +1418,45 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Queue button event listener
-    if (queueBtn) {
+    // Header sync button (mobile duplicate)
+    const headerSyncBtn = document.getElementById('header-sync-btn');
+    if (headerSyncBtn) {
+        headerSyncBtn.addEventListener('click', () => {
+            if (!player.src || player.src.endsWith('/null')) return;
+            console.log('--- User initiated manual sync (header) ---');
+            socket.emit('sync', { room: roomId, time: player.currentTime });
+        });
+    }
+
+    // Queue button event listeners
+    if (queueBtn && queueView && musicGrid) {
         queueBtn.addEventListener('click', () => {
-            if (queueModal) {
-                queueModal.style.display = 'flex';
-                updateQueueDisplay();
+            if (queueView.style.display === 'none') {
+                // Show queue, hide grid
+                queueView.style.display = 'block';
+                musicGrid.style.display = 'none';
+                queueBtn.classList.add('active');
+            } else {
+                // Show grid, hide queue
+                queueView.style.display = 'none';
+                musicGrid.style.display = 'grid'; // Restore grid display
+                queueBtn.classList.remove('active');
             }
         });
     }
 
-    // Close queue modal
-    if (closeQueueBtn) {
-        closeQueueBtn.addEventListener('click', () => {
-            if (queueModal) {
-                queueModal.style.display = 'none';
-            }
-        });
-    }
-
-    // Close queue modal on backdrop click
-    if (queueModal) {
-        queueModal.addEventListener('click', (e) => {
-            if (e.target === queueModal) {
-                queueModal.style.display = 'none';
-            }
-        });
-    }
-
-    // Lyrics button event listener (opens modal)
+    // Lyrics button event listener (shows fullscreen overlay)
     if (lyricsBtn) {
+        console.log('Lyrics button found, adding click handler');
         lyricsBtn.addEventListener('click', () => {
-            if (lyricsModal) {
-                lyricsModal.style.display = 'flex';
-                fetchAndDisplayLyrics();
-            }
-        });
-    }
-
-    // Lyrics toggle button event listener (toggles fullscreen lyrics)
-    if (lyricsToggleBtn) {
-        console.log('Lyrics toggle button found, adding click handler');
-        let lastClickTime = 0;
-        lyricsToggleBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            const now = Date.now();
-            if (now - lastClickTime < 500) {
-                console.log('Click ignored due to debounce');
-                return;
-            }
-            lastClickTime = now;
-            console.log('Lyrics toggle button clicked');
             toggleFullscreenLyrics();
         });
     } else {
-        console.log('Lyrics toggle button NOT found');
+        console.log('Lyrics button NOT found');
     }
 
-    // Close lyrics modal
-    if (closeLyricsBtn) {
-        closeLyricsBtn.addEventListener('click', () => {
-            if (lyricsModal) {
-                lyricsModal.style.display = 'none';
-                // Stop lyrics sync when modal is closed
-                stopLyricsSync();
-            }
-        });
-    }
-
-    // Close lyrics modal on backdrop click
-    if (lyricsModal) {
-        lyricsModal.addEventListener('click', (e) => {
-            if (e.target === lyricsModal) {
-                lyricsModal.style.display = 'none';
-                // Stop lyrics sync when modal is closed
-                stopLyricsSync();
-            }
-        });
-    }
-
-    // Member count button event listener (opens modal)
-    if (memberCount) {
-        memberCount.addEventListener('click', () => {
-            console.log('Member count button clicked!');
-            
-            // Disable member modal in fullscreen mode
-            if (document.body.classList.contains('fullscreen-mode')) {
-                console.log('Member modal disabled in fullscreen mode');
-                return;
-            }
-            
-            if (membersModal) {
-                console.log('Opening members modal');
-                membersModal.style.display = 'flex';
-                fetchAndDisplayMembers();
-            } else {
-                console.error('Members modal not found');
-            }
-        });
-    } else {
-        console.error('Member count element not found');
-    }
-
-    // Close members modal
-    if (closeMembersBtn) {
-        closeMembersBtn.addEventListener('click', () => {
-            if (membersModal) {
-                membersModal.style.display = 'none';
-            }
-        });
-    }
-
-    // Close members modal on backdrop click
-    if (membersModal) {
-        membersModal.addEventListener('click', (e) => {
-            if (e.target === membersModal) {
-                membersModal.style.display = 'none';
-            }
-        });
-    }
+    // Members sidebar is always visible - no toggle needed
+    // Auto-load members on page load (will be called after socket connects)
 
     // Next/Previous song buttons
     if (nextBtn) {
@@ -1506,7 +1682,11 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Initialize queue display
         updateQueueCount();
+        updateMusicGrid();
         updateNextPrevButtons();
+        
+        // Auto-load members in sidebar
+        fetchAndDisplayMembers();
     });
 
     socket.on('scheduled_play', (data) => {
@@ -1549,6 +1729,26 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => { isReceivingUpdate = false; }, 150);
     });
 
+    // Listen for play command from server (e.g., when playing from queue)
+    socket.on('play', (data) => {
+        console.log('[DEBUG] Received play event from server');
+        isReceivingUpdate = true;
+        
+        // Start playback
+        player.play().then(() => {
+            fileNameDisplay.classList.add('playing');
+            showCoverDancingBars();
+            updateFileNameAnimation();
+            updateThemeForPlayingState();
+            updateCoverPositionVars();
+            startLyricsSync();
+        }).catch(err => {
+            console.warn('Auto-play was prevented:', err);
+        });
+        
+        setTimeout(() => { isReceivingUpdate = false; }, 150);
+    });
+
     socket.on('new_file', (data) => {
         console.log('[DEBUG] Received new_file event with data:', data);
         console.log('[DEBUG] Filename type:', typeof data.filename);
@@ -1588,6 +1788,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Track current song using filename for uploads or proxy/video id for streams
     currentSongFile = incomingKey;
+
+    // Update player track info title/artist immediately
+    const newTitle = data.title || (data.filename_display || data.filename || 'Unknown').replace(/_/g, ' ').replace(/\.(mp3|wav|ogg|flac|m4a)$/i, '');
+    const newArtist = data.artist || '';
+    if (playerTrackTitle) { playerTrackTitle.textContent = newTitle; playerTrackTitle.title = newTitle; }
+    if (playerTrackArtist) {
+        if (newArtist) { playerTrackArtist.textContent = newArtist; playerTrackArtist.title = newArtist; playerTrackArtist.style.display = 'block'; }
+        else { playerTrackArtist.textContent = ''; playerTrackArtist.style.display = 'none'; }
+    }
 
         // Use display filename if available, otherwise fallback to filename
         const displayFilename = data.filename_display || data.filename;
@@ -1730,8 +1939,8 @@ document.addEventListener('DOMContentLoaded', () => {
 	currentQueueIndex = typeof data.current_index === 'number' ? data.current_index : parseInt(data.current_index, 10);
 	if (isNaN(currentQueueIndex)) currentQueueIndex = -1;
 
-        // Handle empty queue - stop playback and clear current song
-        if (currentQueue.length === 0) {
+        // Handle empty queue or no song selected - stop playback and clear current song
+        if (currentQueue.length === 0 || currentQueueIndex === -1) {
             player.pause();
             player.src = '';
             player.load();
@@ -1739,6 +1948,12 @@ document.addEventListener('DOMContentLoaded', () => {
             songArtistElement.textContent = "";
             fileNameDisplay.classList.remove('playing');
             hideCoverDancingBars();
+            
+            // Reset progress bar
+            if (progressFill) progressFill.style.width = '0%';
+            if (progressHandle) progressHandle.style.left = '0%';
+            if (currentTimeDisplay) currentTimeDisplay.textContent = "0:00";
+            if (totalTimeDisplay) totalTimeDisplay.textContent = "0:00";
             
             // Hide both cover art and placeholder when no file is selected
             coverArt.style.display = 'none';
@@ -1748,9 +1963,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 coverArtPlaceholder.classList.remove('visible');
             }
             
-            // Hide fullscreen button if no audio
+            // Hide thumbnail
+            const playerThumbnail = document.getElementById('player-thumbnail');
+            if (playerThumbnail) {
+                playerThumbnail.style.display = 'none';
+                playerThumbnail.src = '';
+            }
+            
+            // Hide fullscreen button if no audio (only on desktop, mobile uses header button)
             const fullscreenBtn = document.querySelector('.fullscreen-btn');
-            if (fullscreenBtn) fullscreenBtn.style.setProperty('display', 'none', 'important');
+            if (fullscreenBtn && window.innerWidth > 600) {
+                fullscreenBtn.style.setProperty('display', 'none', 'important');
+            }
             
             // Reset file input to allow re-uploading same file
             if (audioInput) {
@@ -1795,6 +2019,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         updateQueueDisplay();
         updateQueueCount();
+        updateMusicGrid();
         updateNextPrevButtons();
 
         // If uploading, and queue length increased, show current playing filename
@@ -1808,13 +2033,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 const artist = item.artist;
                 songTitleElement.textContent = title;
                 songTitleElement.title = title;
+                if (playerTrackTitle) { playerTrackTitle.textContent = title; playerTrackTitle.title = title; }
                 if (artist) {
                     songArtistElement.textContent = artist;
                     songArtistElement.title = artist;
                     songArtistElement.style.display = 'block';
+                    if (playerTrackArtist) { playerTrackArtist.textContent = artist; playerTrackArtist.title = artist; playerTrackArtist.style.display = 'block'; }
                 } else {
                     songArtistElement.textContent = "";
                     songArtistElement.style.display = 'none';
+                    if (playerTrackArtist) { playerTrackArtist.textContent = ''; playerTrackArtist.style.display = 'none'; }
                 }
             }
         }
@@ -1964,10 +2192,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 coverArtPlaceholder.style.display = 'none';
                 coverArtPlaceholder.classList.remove('visible');
             }
+            
+            // Hide thumbnail
+            const playerThumbnail = document.getElementById('player-thumbnail');
+            if (playerThumbnail) {
+                playerThumbnail.style.display = 'none';
+                playerThumbnail.src = '';
+            }
+
             updateFileNameAnimation();
             updateCoverPositionVars();
-            // Hide fullscreen button if no audio
-            if (fullscreenBtn) fullscreenBtn.style.setProperty('display', 'none', 'important');
+            // Hide fullscreen button if no audio (only on desktop, mobile uses header button)
+            if (fullscreenBtn && window.innerWidth > 600) {
+                fullscreenBtn.style.setProperty('display', 'none', 'important');
+            }
             return;
         }
         
@@ -2044,6 +2282,22 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         player.load();
+        
+        // Update player thumbnail
+        const playerThumbnail = document.getElementById('player-thumbnail');
+        if (playerThumbnail) {
+            if (cover) {
+                playerThumbnail.src = `/uploads/${cover}`;
+                playerThumbnail.style.display = 'block';
+            } else if (imageUrl) {
+                playerThumbnail.src = imageUrl;
+                playerThumbnail.style.display = 'block';
+            } else {
+                playerThumbnail.style.display = 'none';
+                playerThumbnail.src = '';
+            }
+        }
+
         fileNameDisplay.classList.remove('playing');
         coverArt.style.boxShadow = 'none';
         hideCoverDancingBars();
@@ -2052,8 +2306,10 @@ document.addEventListener('DOMContentLoaded', () => {
         resetTheme();
     updateFileNameAnimation();
     updateCoverPositionVars();
-        // Show fullscreen button when audio is loaded
-        if (fullscreenBtn) fullscreenBtn.style.setProperty('display', 'flex', 'important');
+        // Show fullscreen button when audio is loaded (only on desktop, mobile uses header button)
+        if (fullscreenBtn && window.innerWidth > 600) {
+            fullscreenBtn.style.setProperty('display', 'flex', 'important');
+        }
         
         if (cover) {
             // Hide placeholder and show real cover art
@@ -2250,25 +2506,57 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function showCoverDancingBars() {
-        console.log('showCoverDancingBars called');
-        if (coverDancingBarsLeft) {
-            coverDancingBarsLeft.classList.add('visible');
-            console.log('Left bars made visible');
-        } else {
-            console.log('ERROR: coverDancingBarsLeft not found');
-        }
-        if (coverDancingBarsRight) {
-            coverDancingBarsRight.classList.add('visible');
-            console.log('Right bars made visible');
-        } else {
-            console.log('ERROR: coverDancingBarsRight not found');
+    function showCoverDancingBars(delay = 0) {
+        console.log('showCoverDancingBars called with delay:', delay);
+        
+        // In fullscreen mode, check if a slide animation is in progress
+        // If so, don't show bars - they'll be shown after the slide completes
+        if (document.body.classList.contains('fullscreen-mode') && delay === 0) {
+            const overlay = document.getElementById('fullscreen-color-slide-overlay');
+            if (overlay && (overlay.classList.contains('slide-in') || 
+                           overlay.classList.contains('slide-from-left') || 
+                           overlay.classList.contains('slide-from-right'))) {
+                console.log('Slide animation in progress, skipping immediate bar show');
+                return; // Don't show - the slide completion handler will show them
+            }
         }
         
-        // Initialize audio context and start visualizer
-        initAudioContext();
-        startVisualizer();
-    updateCoverPositionVars();
+        const showBars = () => {
+            // Double-check we're not in a slide animation when the timeout fires
+            if (document.body.classList.contains('fullscreen-mode')) {
+                const overlay = document.getElementById('fullscreen-color-slide-overlay');
+                if (overlay && (overlay.classList.contains('slide-in') || 
+                               overlay.classList.contains('slide-from-left') || 
+                               overlay.classList.contains('slide-from-right'))) {
+                    console.log('Slide still in progress, not showing bars yet');
+                    return;
+                }
+            }
+            
+            if (coverDancingBarsLeft) {
+                coverDancingBarsLeft.classList.add('visible');
+                console.log('Left bars made visible');
+            } else {
+                console.log('ERROR: coverDancingBarsLeft not found');
+            }
+            if (coverDancingBarsRight) {
+                coverDancingBarsRight.classList.add('visible');
+                console.log('Right bars made visible');
+            } else {
+                console.log('ERROR: coverDancingBarsRight not found');
+            }
+            
+            // Initialize audio context and start visualizer
+            initAudioContext();
+            startVisualizer();
+            updateCoverPositionVars();
+        };
+        
+        if (delay > 0) {
+            setTimeout(showBars, delay);
+        } else {
+            showBars();
+        }
     }
 
     function hideCoverDancingBars() {
@@ -2428,16 +2716,18 @@ document.addEventListener('DOMContentLoaded', () => {
             rgb(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}) 80%,
             rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b}))`;
         
-        // Apply container background only when NOT in fullscreen.
-        // In fullscreen, keep container transparent so the slide overlay is visible.
+        // Apply container background only in fullscreen mode.
+        // In normal mode, keep solid black background.
         const container = document.querySelector('.container');
         if (container) {
-            if (!document.body.classList.contains('fullscreen-mode')) {
-                container.style.background = containerGradient;
-                container.style.backdropFilter = 'blur(12px)';
-                container.style.webkitBackdropFilter = 'blur(12px)';
-            } else {
+            if (document.body.classList.contains('fullscreen-mode')) {
+                // In fullscreen, use adaptive background
                 container.style.background = '';
+                container.style.backdropFilter = '';
+                container.style.webkitBackdropFilter = '';
+            } else {
+                // In normal mode, keep solid black - don't apply adaptive gradient
+                container.style.background = '#000';
                 container.style.backdropFilter = '';
                 container.style.webkitBackdropFilter = '';
             }
@@ -2470,88 +2760,26 @@ document.addEventListener('DOMContentLoaded', () => {
         if (mainHeading) {
             // Skip color application in fullscreen mode - will be handled by contrast function
             if (!document.body.classList.contains('fullscreen-mode')) {
-                // Check if heading has a fixed color from dancing bars
-                const fixedColor = mainHeading.getAttribute('data-fixed-color');
-                if (fixedColor) {
-                    // Use the stored fixed color instead of calculating new one
-                    mainHeading.style.removeProperty('background');
-                    mainHeading.style.removeProperty('background-image');
-                    mainHeading.style.removeProperty('-webkit-background-clip');
-                    mainHeading.style.removeProperty('-webkit-text-fill-color');
-                    mainHeading.style.removeProperty('background-clip');
-                    mainHeading.style.color = fixedColor;
-                    mainHeading.style.setProperty('color', fixedColor, 'important');
-                    console.log(`Using fixed heading color: ${fixedColor}`);
-                    computedHeadingColor = fixedColor;
-                } else {
-                    // For the heading, use the opposite shade based on background brightness
-                    // The background at the top is the light shade, so we need to consider its brightness
-                    const topBrightness = getBrightness(shades.light.r, shades.light.g, shades.light.b);
-                    let headingColor;
-                    
-                    if (topBrightness > 128) {
-                        // Light background at top - use dark color for heading
-                        headingColor = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
-                    } else {
-                        // Dark background at top - use light color for heading
-                        headingColor = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
-                    }
-                    
-                    // Force clear any existing styles and apply new color
-                    mainHeading.style.removeProperty('background');
-                    mainHeading.style.removeProperty('background-image');
-                    mainHeading.style.removeProperty('-webkit-background-clip');
-                    mainHeading.style.removeProperty('-webkit-text-fill-color');
-                    mainHeading.style.removeProperty('background-clip');
-                    mainHeading.style.color = headingColor;
-                    mainHeading.style.setProperty('color', headingColor, 'important');
-                    
-                    console.log(`Heading color set to: ${headingColor} (top brightness: ${topBrightness})`);
-                    computedHeadingColor = headingColor;
-                }
+                // In normal mode with black background, use white text
+                mainHeading.style.removeProperty('background');
+                mainHeading.style.removeProperty('background-image');
+                mainHeading.style.removeProperty('-webkit-background-clip');
+                mainHeading.style.removeProperty('-webkit-text-fill-color');
+                mainHeading.style.removeProperty('background-clip');
+                mainHeading.style.color = '#ffffff';
+                mainHeading.style.setProperty('color', '#ffffff', 'important');
+                computedHeadingColor = '#ffffff';
             }
         }
         
-        if (memberCount && !document.body.classList.contains('fullscreen-mode')) {
-            memberCount.style.color = textColor;
-        }
-        if (roomCodeDisplay && !document.body.classList.contains('fullscreen-mode')) {
-            // Check if room code has a fixed color from dancing bars
-            const fixedColor = roomCodeDisplay.getAttribute('data-fixed-color');
-            if (fixedColor) {
-                // Use the stored fixed color instead of calculating new one
-                roomCodeDisplay.style.color = fixedColor;
-                roomCodeDisplay.style.setProperty('color', fixedColor, 'important');
-                roomCodeDisplay.style.borderColor = fixedColor;
-                console.log(`Using fixed room code color: ${fixedColor}`);
-                
-                // Also apply to the span inside room code display
-                const roomCodeSpan = roomCodeDisplay.querySelector('span');
-                if (roomCodeSpan) {
-                    const spanFixedColor = roomCodeSpan.getAttribute('data-fixed-color');
-                    if (spanFixedColor) {
-                        roomCodeSpan.style.setProperty('color', spanFixedColor, 'important');
-                    }
-                }
-            } else {
-                roomCodeDisplay.style.color = textColor;
-                roomCodeDisplay.style.borderColor = textColor;
-            }
-        }
-        // Match file name color to main heading if available
+        // Room code display no longer themed - keeping static dark style
+        
+        // Match file name color to white in normal mode
         if (songTitleText && !document.body.classList.contains('fullscreen-mode')) {
-            if (computedHeadingColor) {
-                songTitleText.style.setProperty('color', computedHeadingColor, 'important');
-            } else {
-                songTitleText.style.color = textColor;
-            }
+            songTitleText.style.setProperty('color', '#ffffff', 'important');
         }
         if (songArtistText && !document.body.classList.contains('fullscreen-mode')) {
-            if (computedHeadingColor) {
-                songArtistText.style.setProperty('color', computedHeadingColor, 'important');
-            } else {
-                songArtistText.style.color = textColor;
-            }
+            songArtistText.style.setProperty('color', 'rgba(255, 255, 255, 0.7)', 'important');
         }
         
         // Style cover art placeholder if visible
@@ -2566,171 +2794,55 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Apply button styles
         controlButtons.forEach(e => {
-            e.style.background = `linear-gradient(135deg, 
-                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15) 0%,
-                rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.08) 50%,
-                rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.05) 100%)`;
-            e.style.borderColor = `rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.25)`;
+            e.style.background = 'transparent';
+            e.style.borderColor = 'transparent';
             
-            // Enhanced contrast logic for button text
-            const avgBackgroundBrightness = (getBrightness(shades.light.r, shades.light.g, shades.light.b) + 
-                                           getBrightness(shades.normal.r, shades.normal.g, shades.normal.b) + 
-                                           getBrightness(shades.dark.r, shades.dark.g, shades.dark.b)) / 3;
+            // Force button text to be white as requested
+            e.style.color = '#ffffff';
             
-            // Use high contrast colors with minimum difference threshold
-            if (avgBackgroundBrightness > 140) {
-                // Light background - use pure black for maximum contrast
-                e.style.color = 'black';
-            } else if (avgBackgroundBrightness < 115) {
-                // Dark background - use pure white for maximum contrast
-                e.style.color = 'white';
-            } else {
-                // Medium brightness - use the color with highest contrast
-                const lightContrast = Math.abs(avgBackgroundBrightness - getBrightness(shades.light.r, shades.light.g, shades.light.b));
-                const darkContrast = Math.abs(avgBackgroundBrightness - getBrightness(shades.dark.r, shades.dark.g, shades.dark.b));
-                
-                if (lightContrast > darkContrast) {
-                    e.style.color = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
-                } else {
-                    e.style.color = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
-                }
-            }
-            
-            e.style.boxShadow = `
-                0 8px 32px 0 rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.3),
-                inset 0 1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15),
-                inset 0 -1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.08)`;
+            e.style.boxShadow = 'none';
         });
         
-        // Apply to create new room button
-        const createRoomBtn = document.querySelector('.create-new-room-button');
-        if (createRoomBtn) {
-            createRoomBtn.style.background = `linear-gradient(135deg, 
-                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15) 0%,
-                rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.08) 50%,
-                rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.05) 100%)`;
-            createRoomBtn.style.borderColor = `rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.25)`;
-            
-            // Enhanced contrast logic for create room button text
-            const avgBackgroundBrightness = (getBrightness(shades.light.r, shades.light.g, shades.light.b) + 
-                                           getBrightness(shades.normal.r, shades.normal.g, shades.normal.b) + 
-                                           getBrightness(shades.dark.r, shades.dark.g, shades.dark.b)) / 3;
-            
-            if (avgBackgroundBrightness > 140) {
-                createRoomBtn.style.color = 'black';
-            } else if (avgBackgroundBrightness < 115) {
-                createRoomBtn.style.color = 'white';
-            } else {
-                const lightContrast = Math.abs(avgBackgroundBrightness - getBrightness(shades.light.r, shades.light.g, shades.light.b));
-                const darkContrast = Math.abs(avgBackgroundBrightness - getBrightness(shades.dark.r, shades.dark.g, shades.dark.b));
-                
-                if (lightContrast > darkContrast) {
-                    createRoomBtn.style.color = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
-                } else {
-                    createRoomBtn.style.color = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
-                }
-            }
-            
-            createRoomBtn.style.boxShadow = `
-                0 8px 32px 0 rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.3),
-                inset 0 1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15),
-                inset 0 -1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.08)`;
-        }
+        // Header control buttons no longer themed - keeping static dark style
+        // createRoomBtn, exitRoomBtn theming removed
 
-        // Apply to exit room button (same logic as create new room button)
-        const exitRoomBtn = document.querySelector('.exit-room-button');
-        if (exitRoomBtn) {
-            exitRoomBtn.style.background = `linear-gradient(135deg, 
-                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15) 0%,
-                rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.08) 50%,
-                rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.05) 100%)`;
-            exitRoomBtn.style.borderColor = `rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.25)`;
-            
-            // Enhanced contrast logic for exit room button text (same as create room button)
-            const avgBackgroundBrightness = (getBrightness(shades.light.r, shades.light.g, shades.light.b) + 
-                                           getBrightness(shades.normal.r, shades.normal.g, shades.normal.b) + 
-                                           getBrightness(shades.dark.r, shades.dark.g, shades.dark.b)) / 3;
-            
-            if (avgBackgroundBrightness > 140) {
-                exitRoomBtn.style.color = 'black';
-            } else if (avgBackgroundBrightness < 115) {
-                exitRoomBtn.style.color = 'white';
-            } else {
-                const lightContrast = Math.abs(avgBackgroundBrightness - getBrightness(shades.light.r, shades.light.g, shades.light.b));
-                const darkContrast = Math.abs(avgBackgroundBrightness - getBrightness(shades.dark.r, shades.dark.g, shades.dark.b));
-                
-                if (lightContrast > darkContrast) {
-                    exitRoomBtn.style.color = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
-                } else {
-                    exitRoomBtn.style.color = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
-                }
-            }
-            
-            exitRoomBtn.style.boxShadow = `
-                0 8px 32px 0 rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.3),
-                inset 0 1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15),
-                inset 0 -1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.08)`;
-        }
-
-        // Apply custom player styling
+        // Apply custom player styling - keep solid black background
         const customPlayer = document.querySelector('.custom-player');
         if (customPlayer) {
-            customPlayer.style.background = `linear-gradient(135deg, 
-                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15) 0%,
-                rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.08) 50%,
-                rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.05) 100%)`;
-            customPlayer.style.borderColor = `rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.25)`;
+            // Don't change player background - keep it solid black
+            customPlayer.style.background = '#1a1d24';
+            customPlayer.style.borderColor = '#2a2d34';
             customPlayer.style.boxShadow = `
-                0 8px 32px 0 rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.3),
-                inset 0 1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15),
-                inset 0 -1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.08)`;
+                0 -4px 18px 0 rgba(0,0,0,0.7),
+                inset 0 1px 0 0 rgba(255,255,255,0.06)`;
         }
 
         // Style time displays with enhanced contrast
         const timeDisplays = document.querySelectorAll('.player-time-display');
         timeDisplays.forEach(display => {
-            // Calculate contrast against the background where time displays appear
-            const backgroundBrightness = getBrightness(shades.normal.r, shades.normal.g, shades.normal.b);
-            
-            if (backgroundBrightness > 140) {
-                display.style.color = 'black';
-            } else if (backgroundBrightness < 115) {
-                display.style.color = 'white';
-            } else {
-                // Use the color with highest contrast
-                const lightBrightness = getBrightness(shades.light.r, shades.light.g, shades.light.b);
-                const darkBrightness = getBrightness(shades.dark.r, shades.dark.g, shades.dark.b);
-                
-                const lightContrast = Math.abs(backgroundBrightness - lightBrightness);
-                const darkContrast = Math.abs(backgroundBrightness - darkBrightness);
-                
-                if (lightContrast > darkContrast) {
-                    display.style.color = `rgb(${shades.light.r}, ${shades.light.g}, ${shades.light.b})`;
-                } else {
-                    display.style.color = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
-                }
-            }
+            // Force time displays to be white
+            display.style.color = '#ffffff';
         });
 
         // Style progress and volume bars
         if (progressFill) {
             progressFill.style.background = buttonColor;
         }
-        if (volumeFillVertical) {
-            volumeFillVertical.style.background = buttonColor;
-        }
+        // Volume slider color update removed to keep default style
+        // if (volumeFillHorizontal) {
+        //     volumeFillHorizontal.style.background = buttonColor;
+        // }
 
-        // Style progress and volume handles
-        const handles = document.querySelectorAll('.progress-handle, .volume-handle');
+        // Style progress handle only (volume handle kept default)
+        const handles = document.querySelectorAll('.progress-handle');
         handles.forEach(handle => {
             handle.style.background = buttonTextColor;
             handle.style.boxShadow = `0 2px 8px rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.4)`;
         });
 
-        // Style progress and volume background bars
+        // Style progress background bar only (volume slider background kept default)
         const progressBar = document.querySelector('.progress-bar');
-        const volumeSliderVertical = document.querySelector('.volume-slider-vertical');
-        const volumePopup = document.querySelector('.volume-popup');
+        // const volumeSliderHorizontal = document.querySelector('.volume-slider-horizontal');
         if (progressBar) {
             progressBar.style.background = `linear-gradient(90deg, 
                 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.12) 0%,
@@ -2738,29 +2850,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.12) 100%)`;
             progressBar.style.borderColor = `rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.15)`;
         }
-        if (volumeSliderVertical) {
-            volumeSliderVertical.style.background = `linear-gradient(180deg, 
-                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15) 0%,
-                rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.08) 50%,
-                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15) 100%)`;
-            volumeSliderVertical.style.borderColor = `rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.15)`;
-        }
-        if (volumePopup) {
-            volumePopup.style.background = `linear-gradient(135deg, 
-                rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.12) 0%,
-                rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.06) 50%,
-                rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.03) 100%)`;
-            volumePopup.style.borderColor = `rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.25)`;
-            volumePopup.style.boxShadow = `
-                0 8px 32px 0 rgba(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b}, 0.3),
-                inset 0 1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15),
-                inset 0 -1px 0 0 rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.08)`;
-        }
+        // if (volumeSliderHorizontal) {
+        //     volumeSliderHorizontal.style.background = `linear-gradient(90deg, 
+        //         rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15) 0%,
+        //         rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.08) 50%,
+        //         rgba(${shades.light.r}, ${shades.light.g}, ${shades.light.b}, 0.15) 100%)`;
+        //     volumeSliderHorizontal.style.borderColor = `rgba(${shades.normal.r}, ${shades.normal.g}, ${shades.normal.b}, 0.15)`;
+        // }
+
+        // Always set the theme border color when we have a valid color
+        // This ensures the cover glow color persists even when paused
+        document.documentElement.style.setProperty('--current-border-color', textColor);
 
         // Handle file name border and bars for playing state
         if (fileNameDisplay.classList.contains('playing')) {
             fileNameDisplay.style.borderColor = textColor;
-            document.documentElement.style.setProperty('--current-border-color', textColor);
             
             // Use improved secondary color selection for dancing bars
             let barColor = buttonColor; // Default fallback
@@ -2793,28 +2897,28 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Store the bar color permanently for heading and room code
             if (mainHeading) {
-                mainHeading.style.setProperty('color', barColorForHeading, 'important');
+                mainHeading.style.setProperty('color', '#ffffff', 'important');
                 // Store as data attribute for persistence
-                mainHeading.setAttribute('data-fixed-color', barColorForHeading);
+                mainHeading.setAttribute('data-fixed-color', '#ffffff');
             }
             if (songTitleText) {
-                songTitleText.style.setProperty('color', barColorForHeading, 'important');
-                songTitleText.setAttribute('data-fixed-color', barColorForHeading);
+                songTitleText.style.setProperty('color', '#ffffff', 'important');
+                songTitleText.setAttribute('data-fixed-color', '#ffffff');
             }
             if (songArtistText) {
-                songArtistText.style.setProperty('color', barColorForHeading, 'important');
-                songArtistText.setAttribute('data-fixed-color', barColorForHeading);
+                songArtistText.style.setProperty('color', 'rgba(255, 255, 255, 0.7)', 'important');
+                songArtistText.setAttribute('data-fixed-color', 'rgba(255, 255, 255, 0.7)');
             }
             if (roomCodeDisplay) {
-                roomCodeDisplay.style.setProperty('color', barColorForHeading, 'important');
+                roomCodeDisplay.style.setProperty('color', '#ffffff', 'important');
                 // Store as data attribute for persistence
-                roomCodeDisplay.setAttribute('data-fixed-color', barColorForHeading);
+                roomCodeDisplay.setAttribute('data-fixed-color', '#ffffff');
                 
                 // Also apply to the span inside room code display
                 const roomCodeSpan = roomCodeDisplay.querySelector('span');
                 if (roomCodeSpan) {
-                    roomCodeSpan.style.setProperty('color', barColorForHeading, 'important');
-                    roomCodeSpan.setAttribute('data-fixed-color', barColorForHeading);
+                    roomCodeSpan.style.setProperty('color', '#ffffff', 'important');
+                    roomCodeSpan.setAttribute('data-fixed-color', '#ffffff');
                 }
             }
             
@@ -2864,7 +2968,6 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Reset text colors
         const mainHeading = document.querySelector('.main-heading');
-        const memberCount = document.querySelector('.member-count');
         const roomCodeDisplay = document.querySelector('.room-code-display');
         const songTitleText = document.querySelector('#song-title');
         const songArtistText = document.querySelector('#song-artist');
@@ -2882,7 +2985,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
         
-    if (memberCount) memberCount.style.color = '';
         if (roomCodeDisplay) {
             // Only reset if no fixed color is stored
             const fixedColor = roomCodeDisplay.getAttribute('data-fixed-color');
@@ -2965,12 +3067,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (progressFill) {
             progressFill.style.background = '';
         }
-        if (volumeFillVertical) {
-            volumeFillVertical.style.background = '';
+        const volumeFillHorizontal = document.getElementById('volume-fill-horizontal');
+        if (volumeFillHorizontal) {
+            volumeFillHorizontal.style.background = '';
         }
 
         // Reset handles
-        const handles = document.querySelectorAll('.progress-handle, .volume-handle');
+        const handles = document.querySelectorAll('.progress-handle, .volume-handle-horizontal');
         handles.forEach(handle => {
             handle.style.background = '';
             handle.style.boxShadow = '';
@@ -2978,20 +3081,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Reset background bars
         const progressBar = document.querySelector('.progress-bar');
-        const volumeSliderVertical = document.querySelector('.volume-slider-vertical');
-        const volumePopup = document.querySelector('.volume-popup');
+        const volumeSliderHorizontal = document.querySelector('.volume-slider-horizontal');
         if (progressBar) {
             progressBar.style.background = '';
             progressBar.style.borderColor = '';
         }
-        if (volumeSliderVertical) {
-            volumeSliderVertical.style.background = '';
-            volumeSliderVertical.style.borderColor = '';
-        }
-        if (volumePopup) {
-            volumePopup.style.background = '';
-            volumePopup.style.borderColor = '';
-            volumePopup.style.boxShadow = '';
+        if (volumeSliderHorizontal) {
+            volumeSliderHorizontal.style.background = '';
+            volumeSliderHorizontal.style.borderColor = '';
         }
         
         // Reset bars and borders
@@ -3007,13 +3104,35 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateMemberCount(count) {
-        // Update the member count in the members button
-        const memberCountElement = document.querySelector('.member-count');
-        if (memberCountElement) {
-            // Keep the icon and update the text
-            memberCountElement.innerHTML = `<i class="fa-solid fa-user-group"></i> ${count}`;
-            console.log(`Member count updated: ${count}`);
+        // Update header badge count (for mobile)
+        const badgeCount = document.getElementById('members-badge-count');
+        if (badgeCount) {
+            badgeCount.textContent = count;
         }
+        console.log(`Member count updated: ${count}`);
+    }
+
+    // Members badge click handler (mobile) - open modal
+    const membersBadgeBtn = document.getElementById('members-badge-btn');
+    const membersModal = document.getElementById('members-modal');
+    const closeMembersBtn = document.getElementById('close-members');
+
+    if (membersBadgeBtn && membersModal) {
+        membersBadgeBtn.addEventListener('click', () => {
+            membersModal.style.display = 'flex';
+            fetchAndDisplayMembers();
+        });
+    }
+    if (closeMembersBtn && membersModal) {
+        closeMembersBtn.addEventListener('click', () => {
+            membersModal.style.display = 'none';
+        });
+        // Close on backdrop click
+        membersModal.addEventListener('click', (e) => {
+            if (e.target === membersModal) {
+                membersModal.style.display = 'none';
+            }
+        });
     }
 
     // ===============================
@@ -3021,7 +3140,137 @@ document.addEventListener('DOMContentLoaded', () => {
     // ===============================
     function updateQueueCount() {
         if (queueCount) {
-            queueCount.textContent = currentQueue.length;
+            const count = currentQueue.length;
+            queueCount.textContent = count;
+            
+            // Show/hide badge based on count
+            if (count > 0) {
+                queueCount.classList.add('visible');
+                // Trigger pulse animation
+                queueCount.classList.remove('pulse');
+                void queueCount.offsetWidth; // Force reflow
+                queueCount.classList.add('pulse');
+            } else {
+                queueCount.classList.remove('visible');
+            }
+        }
+    }
+
+    // Update playing/paused state on grid items without rebuilding
+    function updateGridPlayingState() {
+        const playingItem = document.querySelector('.music-grid-item.playing');
+        if (playingItem) {
+            if (player.paused) {
+                playingItem.classList.add('paused');
+            } else {
+                playingItem.classList.remove('paused');
+            }
+        }
+    }
+
+    function updateMusicGrid() {
+        const musicGrid = document.getElementById('music-grid');
+        if (!musicGrid) return;
+
+        if (currentQueue.length === 0) {
+            musicGrid.innerHTML = `
+                <div class="music-grid-empty">
+                    <i class="fas fa-music"></i>
+                    <p>No music uploaded yet</p>
+                    <p class="music-grid-hint">Upload audio files to see them here</p>
+                </div>
+            `;
+            return;
+        }
+
+        const gridHTML = currentQueue.map((item, index) => {
+            const isCurrentSong = Number(index) === Number(currentQueueIndex);
+            
+            // Handle cover images for both local files and remote URLs
+            let coverSrc = '';
+            if (item.cover) {
+                coverSrc = `/uploads/${item.cover}`;
+            } else if (item.image_url) {
+                coverSrc = item.image_url;
+            }
+            
+            const coverDisplay = coverSrc 
+                ? `<img src="${coverSrc}" alt="Cover" class="music-grid-item-cover" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                   <div class="music-grid-item-placeholder" style="display:none;"><i class="fas fa-music"></i></div>` 
+                : '<div class="music-grid-item-placeholder"><i class="fas fa-music"></i></div>';
+            
+            const streamIndicator = item.is_stream ? '<i class="fas fa-globe" title="Streamed"></i>' : '';
+            
+            // Playing visualizer bars
+            const playingVisualizer = `
+                <div class="music-grid-playing-visualizer">
+                    <div class="visualizer-bar"></div>
+                    <div class="visualizer-bar"></div>
+                    <div class="visualizer-bar"></div>
+                    <div class="visualizer-bar"></div>
+                </div>
+            `;
+            
+            return `
+                <div class="music-grid-item ${isCurrentSong ? 'playing' : ''}" data-index="${index}">
+                    <div class="music-grid-thumb-wrapper">
+                        ${coverDisplay}
+                        ${isCurrentSong ? playingVisualizer : ''}
+                        <div class="music-grid-hover-play"><i class="fas fa-play"></i></div>
+                        <div class="music-grid-hover-delete" data-index="${index}"><i class="fas fa-trash"></i></div>
+                    </div>
+                    <div class="music-grid-title">${item.title || item.filename_display || item.filename}</div>
+                </div>
+            `;
+        }).join('');
+
+        musicGrid.innerHTML = gridHTML;
+
+        // Add click listeners to grid items
+        const gridItems = musicGrid.querySelectorAll('.music-grid-item');
+        gridItems.forEach(item => {
+            // Play button click
+            const playBtn = item.querySelector('.music-grid-hover-play');
+            if (playBtn) {
+                playBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const index = parseInt(item.dataset.index);
+                    loadFromQueue(index);
+                });
+            }
+            
+            // Delete button click
+            const deleteBtn = item.querySelector('.music-grid-hover-delete');
+            if (deleteBtn) {
+                deleteBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const index = parseInt(deleteBtn.dataset.index);
+                    
+                    // Add deleting animation class
+                    item.classList.add('deleting');
+                    
+                    // Wait for animation to complete before emitting delete
+                    setTimeout(() => {
+                        socket.emit('remove_from_queue', { room: roomId, index: index });
+                    }, 400);
+                });
+            }
+            
+            // Clicking anywhere else on the item also plays
+            item.addEventListener('click', () => {
+                const index = parseInt(item.dataset.index);
+                loadFromQueue(index);
+            });
+        });
+
+        // Show/hide now playing section based on whether something is playing
+        const nowPlayingSection = document.getElementById('now-playing-section');
+        if (nowPlayingSection) {
+            if (player.src && !player.paused) {
+                nowPlayingSection.classList.add('active');
+            } else {
+                nowPlayingSection.classList.remove('active');
+            }
         }
     }
 
@@ -3036,6 +3285,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Render queue items with draggable attributes for reordering
         const queueHTML = currentQueue.map((item, index) => {
             const isCurrentSong = Number(index) === Number(currentQueueIndex);
+            const isPlaying = player && !player.paused;
             
             // Handle cover images for both local files and remote URLs
             let coverSrc = '';
@@ -3052,23 +3302,31 @@ document.addEventListener('DOMContentLoaded', () => {
                    <div class="queue-item-cover" style="display:none;">🎵</div>` 
                 : '<div class="queue-item-cover">🎵</div>';
             
-            // Show stream indicator for streamed songs
-            const streamIndicator = item.is_stream ? '<span class="stream-indicator" title="Streamed from YouTube Music">🌐</span>' : '';
-            
             // Only make items draggable if there's more than one song in the queue
             const isDraggable = currentQueue.length > 1;
             
+            // Show visualizer for current song only when playing, otherwise show index
+            const indexOrVisualizer = (isCurrentSong && isPlaying)
+                ? `<div class="queue-item-visualizer">
+                       <span class="bar"></span>
+                       <span class="bar"></span>
+                       <span class="bar"></span>
+                       <span class="bar"></span>
+                   </div>`
+                : `<div class="queue-item-index">${index + 1}</div>`;
+            
             return `
                 <div class="queue-item ${isCurrentSong ? 'current' : ''}" data-index="${index}" ${isDraggable ? 'draggable="true"' : ''}>
-                    ${coverDisplay}
+                    ${indexOrVisualizer}
+                    <div class="queue-item-cover-wrapper">
+                        ${coverDisplay}
+                        <div class="queue-item-hover-play" data-index="${index}"><i class="fas fa-play"></i></div>
+                    </div>
                     <div class="queue-item-info">
-                        <div class="queue-item-title">${item.filename_display || item.filename} ${streamIndicator}</div>
-                        <div class="queue-item-status">${isCurrentSong ? 'Now Playing' : `#${index + 1} in queue`}</div>
+                        <div class="queue-item-title">${item.filename_display || item.filename}</div>
+                        <div class="queue-item-status">${item.artist || ''}</div>
                     </div>
                     <div class="queue-item-actions">
-                        <button class="queue-item-btn play-btn" data-index="${index}" title="Play" draggable="false">
-                            <i class="fas fa-play"></i>
-                        </button>
                         <button class="queue-item-btn remove-btn danger" data-index="${index}" title="Remove" draggable="false">
                             <i class="fas fa-trash"></i>
                         </button>
@@ -3128,6 +3386,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         dragSrcIndex = idx;
         draggedElement = itemEl;
+        isQueueDragging = true; // Prevent upload overlay during queue drag
         
         e.dataTransfer.effectAllowed = 'move';
         try { 
@@ -3157,6 +3416,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Cleanup
         dragSrcIndex = null;
         draggedElement = null;
+        isQueueDragging = false; // Allow upload overlay again
         
         if (placeholderEl && placeholderEl.parentNode) {
             placeholderEl.parentNode.removeChild(placeholderEl);
@@ -3288,6 +3548,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         updateQueueDisplay();
+        updateMusicGrid();
         sendReorderRequest(dragSrcIndex, effectiveTo);
     }
 
@@ -3334,14 +3595,16 @@ document.addEventListener('DOMContentLoaded', () => {
         e.stopPropagation();
         
         const playBtn = e.target.closest('.play-btn');
+        const hoverPlayBtn = e.target.closest('.queue-item-hover-play');
         const removeBtn = e.target.closest('.remove-btn');
         const queueItem = e.target.closest('.queue-item');
         
-        console.log('Button detection:', { playBtn, removeBtn, queueItem });
+        console.log('Button detection:', { playBtn, hoverPlayBtn, removeBtn, queueItem });
         
-        if (playBtn) {
+        if (playBtn || hoverPlayBtn) {
             e.preventDefault();
-            const index = parseInt(playBtn.dataset.index);
+            const btn = playBtn || hoverPlayBtn;
+            const index = parseInt(btn.dataset.index);
             console.log('Play button clicked, index:', index);
             if (!isNaN(index)) {
                 console.log('Playing from queue index:', index);
@@ -3521,6 +3784,22 @@ document.addEventListener('DOMContentLoaded', () => {
         
         lyricsContent.innerHTML = `<div class="lyrics-text">${lyricsHTML}</div>`;
         
+        // Add click-to-seek functionality for lyrics lines
+        const lyricsLines = lyricsContent.querySelectorAll('.lyrics-line');
+        lyricsLines.forEach(line => {
+            line.addEventListener('click', () => {
+                const time = parseFloat(line.dataset.time);
+                if (!isNaN(time) && player) {
+                    player.currentTime = time;
+                    if (player.paused) {
+                        player.play();
+                    }
+                    // Emit seek event for sync
+                    socket.emit('seek', { room: roomId, time: time });
+                }
+            });
+        });
+        
         // Start lyrics synchronization if audio is playing
         if (player && !player.paused) {
             startLyricsSync();
@@ -3621,7 +3900,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     console.log('Showing fullscreen lyrics overlay');
     isFullscreenLyricsVisible = true;
-    document.body.classList.add('lyrics-active'); // Add this line
+    document.body.classList.add('lyrics-active');
+    
+    // Hide header buttons on mobile during lyrics view
+    const membersBadge = document.querySelector('.members-badge-btn');
+    const headerFullscreen = document.getElementById('header-fullscreen-btn');
+    if (membersBadge) membersBadge.style.display = 'none';
+    if (headerFullscreen) headerFullscreen.style.display = 'none';
+
+    // Set background to cover art's dominant color
+    if (currentDominantColor) {
+        const [r, g, b] = currentDominantColor;
+        document.documentElement.style.setProperty('--lyrics-bg-color', `rgb(${r}, ${g}, ${b})`);
+    } else {
+        document.documentElement.style.setProperty('--lyrics-bg-color', '#0a0c10');
+    }
 
     // Ensure the overlay is part of the layout before adding the visible class for transitions
     fullscreenLyricsOverlay.style.display = 'flex';
@@ -3634,11 +3927,21 @@ document.addEventListener('DOMContentLoaded', () => {
     // Fetch and display the actual lyrics
     fetchLyricsForFullscreen();
 
-    // Keep player controls visible while lyrics are shown
+    // Hide player controls when lyrics are shown in fullscreen (go to idle mode)
     if (document.body.classList.contains('fullscreen-mode')) {
-        showPlayerBox();
-        // Prevent the idle timer from hiding controls while lyrics are open
+        // Clear any existing idle timer
         if (fullscreenIdleTimer) clearTimeout(fullscreenIdleTimer);
+        // Force idle mode - hide the player
+        const customPlayer = document.querySelector('.custom-player');
+        const progressBarContainer = document.querySelector('.progress-bar-container');
+        document.body.classList.add('fullscreen-idle');
+        if (customPlayer) customPlayer.classList.add('fullscreen-hide');
+        if (progressBarContainer) {
+            progressBarContainer.classList.add('progress-bar-only');
+            document.body.appendChild(progressBarContainer);
+        }
+        updateFullscreenSongInfo();
+        isPlayerHidden = true;
     }
 }
     // Hide fullscreen lyrics overlay
@@ -3648,6 +3951,12 @@ document.addEventListener('DOMContentLoaded', () => {
         isFullscreenLyricsVisible = false;
         document.body.classList.remove('lyrics-active'); // Add this line
         fullscreenLyricsOverlay.classList.remove('visible');
+        
+        // Show header buttons again on mobile
+        const membersBadge = document.querySelector('.members-badge-btn');
+        const headerFullscreen = document.getElementById('header-fullscreen-btn');
+        if (membersBadge && window.innerWidth <= 1024) membersBadge.style.display = 'flex';
+        if (headerFullscreen && window.innerWidth <= 600) headerFullscreen.style.display = 'flex';
         
         // Resume idle timer when lyrics are hidden
         if (document.body.classList.contains('fullscreen-mode')) {
@@ -3683,6 +3992,22 @@ document.addEventListener('DOMContentLoaded', () => {
         ).join('');
         
         fullscreenLyricsContent.innerHTML = `<div class="lyrics-text">${lyricsHTML}</div>`;
+        
+        // Add click-to-seek functionality for fullscreen lyrics lines
+        const fsLyricsLines = fullscreenLyricsContent.querySelectorAll('.lyrics-line');
+        fsLyricsLines.forEach(line => {
+            line.addEventListener('click', () => {
+                const time = parseFloat(line.dataset.time);
+                if (!isNaN(time) && player) {
+                    player.currentTime = time;
+                    if (player.paused) {
+                        player.play();
+                    }
+                    // Emit seek event for sync
+                    socket.emit('seek', { room: roomId, time: time });
+                }
+            });
+        });
         
         // Force immediate highlight update to sync with current playback position
         if (player) {
@@ -3860,6 +4185,10 @@ document.addEventListener('DOMContentLoaded', () => {
     function nextSong() {
     lastChangeDirection = 'next';
     manualDirection = 'next';
+    // Hide dancing bars during slide animation in fullscreen
+    if (document.body.classList.contains('fullscreen-mode')) {
+        hideCoverDancingBars();
+    }
     triggerFullscreenColorSlide('next');
         socket.emit('next_song', { room: roomId, auto_play: false });
     }
@@ -3867,8 +4196,31 @@ document.addEventListener('DOMContentLoaded', () => {
     function previousSong() {
     lastChangeDirection = 'prev';
     manualDirection = 'prev';
+    // Hide dancing bars during slide animation in fullscreen
+    if (document.body.classList.contains('fullscreen-mode')) {
+        hideCoverDancingBars();
+    }
     triggerFullscreenColorSlide('prev');
         socket.emit('previous_song', { room: roomId });
+    }
+
+    // Select and play a specific song in the queue by index
+    function loadFromQueue(index) {
+        if (typeof index !== 'number') return;
+        if (index < 0 || index >= currentQueue.length) return;
+
+        // Determine direction for visual feedback
+        if (currentQueueIndex !== -1 && currentQueueIndex !== index) {
+            manualDirection = index > currentQueueIndex ? 'next' : 'prev';
+            lastChangeDirection = manualDirection;
+            // Hide dancing bars during slide animation in fullscreen
+            if (document.body.classList.contains('fullscreen-mode')) {
+                hideCoverDancingBars();
+            }
+            triggerFullscreenColorSlide(manualDirection);
+        }
+
+        socket.emit('select_song', { room: roomId, index: index });
     }
 
     function triggerSlideAnimation(direction) {
@@ -3982,12 +4334,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const applyColorSlide = () => {
             if (currentDominantColor) {
                 const [r, g, b] = currentDominantColor;
-                const shades = getSecondaryColorOrShades(currentDominantColor, currentColorPalette);
                 
-                // Create body background gradient for the new theme
-                // Solid color (use darker shade) instead of gradient in fullscreen
-                const bodySolid = `rgb(${shades.dark.r}, ${shades.dark.g}, ${shades.dark.b})`;
+                // Use dominant color directly to match lyrics background color
+                const bodySolid = `rgb(${r}, ${g}, ${b})`;
                 overlay.style.background = bodySolid;
+                
+                // Also update the lyrics background color CSS variable to stay in sync
+                document.documentElement.style.setProperty('--lyrics-bg-color', bodySolid);
 
                 // Prepare overlay: snap to start position without transition to prevent edge stutter
                 overlay.classList.add('no-transition');
@@ -4041,6 +4394,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (coverSection2) {
                             coverSection2.classList.remove('fullscreen-cover-next-in', 'fullscreen-cover-prev-in');
                         }
+                        // Show dancing bars after slide animation completes (with fade-in)
+                        if (player && !player.paused) {
+                            showCoverDancingBars(100); // Small delay for smooth appearance
+                        }
                     }, 800); // Wait for slide-in to complete (matches CSS 0.8s)
                 }, 50);
             } else {
@@ -4086,6 +4443,11 @@ function toggleFullscreen() {
                 }, 100);
             }
 
+            // Show dancing bars if music is playing (delay in fullscreen to wait for background slide)
+            if (player && !player.paused) {
+                showCoverDancingBars(850); // Wait for 0.8s slide + small buffer
+            }
+
             // Ensure overlay is visible (clear inline none set on exit) and trigger a slide-in
             const overlay = document.getElementById('fullscreen-color-slide-overlay');
             if (overlay) {
@@ -4102,6 +4464,16 @@ function toggleFullscreen() {
     } else {
         if (document.exitFullscreen) {
             document.exitFullscreen().then(() => {
+                // Disable player transition when exiting fullscreen
+                const customPlayer = document.querySelector('.custom-player');
+                if (customPlayer) {
+                    customPlayer.classList.add('no-transition');
+                    // Re-enable transitions after a brief moment
+                    setTimeout(() => {
+                        customPlayer.classList.remove('no-transition');
+                    }, 50);
+                }
+                
                 // Remove fullscreen mode class when exiting fullscreen
                 document.body.classList.remove('fullscreen-mode');
                 
@@ -4137,6 +4509,16 @@ function toggleFullscreen() {
 // Listen for fullscreen changes to handle ESC key or other exits
 document.addEventListener('fullscreenchange', () => {
     if (!document.fullscreenElement) {
+        // Disable player transition when exiting fullscreen
+        const customPlayer = document.querySelector('.custom-player');
+        if (customPlayer) {
+            customPlayer.classList.add('no-transition');
+            // Re-enable transitions after a brief moment
+            setTimeout(() => {
+                customPlayer.classList.remove('no-transition');
+            }, 50);
+        }
+        
         // Exited fullscreen, remove the mode class
         document.body.classList.remove('fullscreen-mode');
         
@@ -4192,6 +4574,12 @@ const fullscreenBtn = document.getElementById('fullscreen-btn');
 if (fullscreenBtn) {
     fullscreenBtn.addEventListener('click', toggleFullscreen);
 }
+
+// Header fullscreen button (mobile duplicate)
+const headerFullscreenBtn = document.getElementById('header-fullscreen-btn');
+if (headerFullscreenBtn) {
+    headerFullscreenBtn.addEventListener('click', toggleFullscreen);
+}
 // ===============================
 // Fullscreen Idle Hide/Show Logic
 // ===============================
@@ -4202,25 +4590,20 @@ const FULLSCREEN_IDLE_TIMEOUT = 2500; // ms
 function showPlayerBox() {
     const customPlayer = document.querySelector('.custom-player');
     const progressBarContainer = document.querySelector('.progress-bar-container');
-    const playerTimeDisplay = document.querySelector('.player-time-display');
+    const progressBarRow = document.querySelector('.progress-bar-row');
+    const totalTimeDisplay = document.getElementById('total-time');
     // Leaving idle state
     document.body.classList.remove('fullscreen-idle');
     if (customPlayer) customPlayer.classList.remove('fullscreen-hide');
     if (progressBarContainer) {
         progressBarContainer.classList.remove('progress-bar-only');
-        // Only move progress bar if it's not already in the correct position
-        if (!customPlayer.contains(progressBarContainer)) {
-            // Insert after player-time-display, which is the correct position
-            if (playerTimeDisplay && playerTimeDisplay.nextSibling) {
-                customPlayer.insertBefore(progressBarContainer, playerTimeDisplay.nextSibling);
+        // Restore progress bar to its original parent (progress-bar-row)
+        if (progressBarRow && !progressBarRow.contains(progressBarContainer)) {
+            // Insert before total-time display
+            if (totalTimeDisplay) {
+                progressBarRow.insertBefore(progressBarContainer, totalTimeDisplay);
             } else {
-                // Fallback: insert before main-player-row
-                const mainPlayerRow = customPlayer.querySelector('.main-player-row');
-                if (mainPlayerRow) {
-                    customPlayer.insertBefore(progressBarContainer, mainPlayerRow);
-                } else {
-                    customPlayer.appendChild(progressBarContainer);
-                }
+                progressBarRow.appendChild(progressBarContainer);
             }
         }
     }
@@ -4229,9 +4612,6 @@ function showPlayerBox() {
 
 function hidePlayerBox() {
     if (!document.body.classList.contains('fullscreen-mode')) return;
-    
-    // Don't hide player controls when lyrics are visible
-    if (isFullscreenLyricsVisible) return;
     
     const customPlayer = document.querySelector('.custom-player');
     const progressBarContainer = document.querySelector('.progress-bar-container');
@@ -4243,17 +4623,30 @@ function hidePlayerBox() {
         // Move progress bar outside of custom player to keep it visible
         document.body.appendChild(progressBarContainer);
     }
+    
+    // Sync fullscreen song info from player track info
+    updateFullscreenSongInfo();
+    
     isPlayerHidden = true;
+}
+
+// Update fullscreen song info display
+function updateFullscreenSongInfo() {
+    const fullscreenTitle = document.getElementById('fullscreen-song-title');
+    const fullscreenArtist = document.getElementById('fullscreen-song-artist');
+    const playerTitle = document.getElementById('player-track-title');
+    const playerArtist = document.getElementById('player-track-artist');
+    
+    if (fullscreenTitle && playerTitle) {
+        fullscreenTitle.textContent = playerTitle.textContent || '';
+    }
+    if (fullscreenArtist && playerArtist) {
+        fullscreenArtist.textContent = playerArtist.textContent || '';
+    }
 }
 
 function resetFullscreenIdleTimer() {
     if (!document.body.classList.contains('fullscreen-mode')) return;
-    
-    // Don't start idle timer when lyrics are visible
-    if (isFullscreenLyricsVisible) {
-        showPlayerBox();
-        return;
-    }
     
     showPlayerBox();
     if (fullscreenIdleTimer) clearTimeout(fullscreenIdleTimer);
@@ -4295,23 +4688,18 @@ document.addEventListener('fullscreenchange', () => {
             // Always restore progress bar when exiting fullscreen, regardless of state
             const customPlayer = document.querySelector('.custom-player');
             const progressBarContainer = document.querySelector('.progress-bar-container');
-            const playerTimeDisplay = document.querySelector('.player-time-display');
+            const progressBarRow = document.querySelector('.progress-bar-row');
+            const totalTimeDisplay = document.getElementById('total-time');
             if (customPlayer) customPlayer.classList.remove('fullscreen-hide');
             if (progressBarContainer) {
                 progressBarContainer.classList.remove('progress-bar-only');
-                // Ensure progress bar is back in its proper position
-                if (!customPlayer.contains(progressBarContainer)) {
-                    // Insert after player-time-display, which is the correct position
-                    if (playerTimeDisplay && playerTimeDisplay.nextSibling) {
-                        customPlayer.insertBefore(progressBarContainer, playerTimeDisplay.nextSibling);
+                // Restore progress bar to its original parent (progress-bar-row)
+                if (progressBarRow && !progressBarRow.contains(progressBarContainer)) {
+                    // Insert before total-time display
+                    if (totalTimeDisplay) {
+                        progressBarRow.insertBefore(progressBarContainer, totalTimeDisplay);
                     } else {
-                        // Fallback: insert before main-player-row
-                        const mainPlayerRow = customPlayer.querySelector('.main-player-row');
-                        if (mainPlayerRow) {
-                            customPlayer.insertBefore(progressBarContainer, mainPlayerRow);
-                        } else {
-                            customPlayer.appendChild(progressBarContainer);
-                        }
+                        progressBarRow.appendChild(progressBarContainer);
                     }
                 }
             }
@@ -4406,16 +4794,19 @@ document.addEventListener('fullscreenchange', () => {
     let currentMembers = [];
 
     async function fetchAndDisplayMembers() {
-        // Get membersList element dynamically in case it wasn't available during initialization
-        const membersList = document.getElementById('members-list');
+        // Get members list element from sidebar
+        const membersList = membersSidebarList || document.getElementById('members-sidebar-list');
         
-        if (!membersList) {
-            console.error('membersList element not found');
-            return;
+        // Show loading state in sidebar
+        if (membersList) {
+            membersList.innerHTML = '<p class="loading-members">Loading members...</p>';
         }
-
-        // Show loading state
-        membersList.innerHTML = '<p class="loading-members">Loading members...</p>';
+        
+        // Show loading state in modal too
+        const modalList = document.getElementById('members-list');
+        if (modalList) {
+            modalList.innerHTML = '<p class="loading-members">Loading members...</p>';
+        }
 
         try {
             // Request member list from server
@@ -4437,14 +4828,19 @@ document.addEventListener('fullscreenchange', () => {
     }
 
     function showMembersError(message) {
-        const membersList = document.getElementById('members-list');
+        const membersList = membersSidebarList || document.getElementById('members-sidebar-list');
         if (membersList) {
             membersList.innerHTML = `<p class="no-members">${message}</p>`;
+        }
+        // Also update modal list
+        const modalList = document.getElementById('members-list');
+        if (modalList) {
+            modalList.innerHTML = `<p class="no-members">${message}</p>`;
         }
     }
 
     function updateMembersList(members) {
-        const membersList = document.getElementById('members-list');
+        const membersList = membersSidebarList || document.getElementById('members-sidebar-list');
         if (!membersList) return;
         
         currentMembers = members || [];
@@ -4529,10 +4925,16 @@ document.addEventListener('fullscreenchange', () => {
             `;
         }).join('');
 
-        // Get membersList again to ensure it's current
-        const membersListElement = document.getElementById('members-list');
-        if (membersListElement) {
-            membersListElement.innerHTML = membersHTML;
+        // Inject generated HTML into the sidebar list element
+        const sidebarList = membersSidebarList || document.getElementById('members-sidebar-list');
+        if (sidebarList) {
+            sidebarList.innerHTML = membersHTML;
+        }
+        
+        // Also update the modal list (for mobile)
+        const modalList = document.getElementById('members-list');
+        if (modalList) {
+            modalList.innerHTML = membersHTML;
         }
     }
 
@@ -4580,7 +4982,6 @@ document.addEventListener('fullscreenchange', () => {
     const searchModal = document.getElementById('search-modal');
     const searchResults = document.getElementById('search-results');
     const closeSearch = document.getElementById('close-search');
-    const JIOSAAVN_SEARCH_PREFIX = 'js:'; // Prefix to route search to JioSaavn
 
     if (searchInput && searchBtn && searchModal && searchResults) {
         // --- Comprehensive Search Safeguards ---
@@ -4609,80 +5010,40 @@ document.addEventListener('fullscreenchange', () => {
         function closeSearchModal() { searchModal.style.display = 'none'; }
 
         async function doSearch(q) {
-            const raw = q.trim();
-            if (!raw) return;
-            const isJio = raw.toLowerCase().startsWith(JIOSAAVN_SEARCH_PREFIX);
-            const coreQuery = isJio ? raw.slice(JIOSAAVN_SEARCH_PREFIX.length).trim() : raw;
-            if (!coreQuery) return;
+            const query = q.trim();
+            if (!query) return;
 
             searchResults.innerHTML = '<p class="loading-members">Searching...</p>';
 
             try {
-                if (isJio) {
-                    const res = await fetch(`/search_jiosaavn?q=${encodeURIComponent(coreQuery)}`);
-                    const data = await res.json();
-                    if (!data.success || !data.results || data.results.length === 0) {
-                        searchResults.innerHTML = `<p class="no-members">${data.error || 'No JioSaavn results'}</p>`;
-                        return;
-                    }
-                    let html = '';
-                    data.results.forEach((song, idx) => {
-                        html += `
-                        <div class="search-result-item" style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.1);">
-                            <img src="${song.image || ''}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;display:${song.image ? 'block' : 'none'}" />
-                            <div style="flex:1;min-width:0;">
-                                <div style="font-weight:600;font-size:0.95rem;margin-bottom:2px;">${song.title || 'Unknown'}</div>
-                                <div style="color:rgba(255,255,255,0.7);font-size:0.85rem;">${song.artist || 'Unknown Artist'}</div>
-                            </div>
-                            <button class="add-jio-btn control-button" data-index="${idx}">Add</button>
-                        </div>`;
-                    });
-                    searchResults.innerHTML = html;
-                    document.querySelectorAll('.add-jio-btn').forEach(btn => {
-                        btn.addEventListener('click', async (e) => {
-                            const button = e.currentTarget;
-                            const index = parseInt(button.getAttribute('data-index'));
-                            const song = data.results[index];
-                            button.textContent = 'Processing...';
-                            button.disabled = true;
-                            await addJioSaavnSong(button, song);
-                        });
-                    });
-                    return; // Done Jio path
-                }
-
-                // --- YouTube Music path (unchanged) ---
-                const res = await fetch(`/search_ytmusic?q=${encodeURIComponent(coreQuery)}`);
+                // Search JioSaavn directly (no prefix needed)
+                const res = await fetch(`/search_jiosaavn?q=${encodeURIComponent(query)}`);
                 const data = await res.json();
-
                 if (!data.success || !data.results || data.results.length === 0) {
                     searchResults.innerHTML = `<p class="no-members">${data.error || 'No results found'}</p>`;
                     return;
                 }
-
                 let html = '';
-                data.results.forEach((result, index) => {
-                    const md = result.metadata || {};
+                data.results.forEach((song, idx) => {
                     html += `
-                        <div class="search-result-item" style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.1);">
-                            <img src="${md.image_url || ''}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;display:${md.image_url ? 'block' : 'none'}" />
-                            <div style="flex:1;min-width:0;">
-                                <div style="font-weight:600;font-size:0.95rem;margin-bottom:2px;">${md.title || 'Unknown'}</div>
-                                <div style="color:rgba(255,255,255,0.7);font-size:0.85rem;">${md.artist || 'Unknown'}</div>
-                            </div>
-                            <button class="add-via-client-btn control-button" data-index="${index}">Add</button>
-                        </div>`;
+                    <div class="search-result-item">
+                        <img src="${song.image || ''}" alt="" style="display:${song.image ? 'block' : 'none'}" />
+                        <div class="result-info">
+                            <div class="result-title">${song.title || 'Unknown'}</div>
+                            <div class="result-artist">${song.artist || 'Unknown Artist'}</div>
+                        </div>
+                        <button class="add-jio-btn" data-index="${idx}">Add</button>
+                    </div>`;
                 });
                 searchResults.innerHTML = html;
-
-                document.querySelectorAll('.add-via-client-btn').forEach(btn => {
+                document.querySelectorAll('.add-jio-btn').forEach(btn => {
                     btn.addEventListener('click', async (e) => {
                         const button = e.currentTarget;
                         const index = parseInt(button.getAttribute('data-index'));
-                        const result = data.results[index];
+                        const song = data.results[index];
                         button.textContent = 'Processing...';
                         button.disabled = true;
-                        await addSongViaClient(result, button);
+                        await addJioSaavnSong(button, song);
                     });
                 });
             } catch (err) {
@@ -4730,209 +5091,6 @@ document.addEventListener('fullscreenchange', () => {
                     if (!buttonEl.classList.contains('added')) buttonEl.textContent = original;
                     buttonEl.disabled = false;
                 }, 2500);
-            }
-        }
-
-        // Map Content-Type to file extension for accurate uploads
-        function guessAudioExtension(contentType) {
-            if (!contentType) return 'mp3';
-            contentType = contentType.toLowerCase();
-            if (contentType.includes('audio/mpeg')) return 'mp3';
-            if (contentType.includes('audio/mp4') || contentType.includes('audio/x-m4a')) return 'm4a';
-            if (contentType.includes('audio/webm')) return 'webm';
-            if (contentType.includes('audio/ogg')) return 'ogg';
-            if (contentType.includes('audio/opus')) return 'opus';
-            if (contentType.includes('audio/aac')) return 'aac';
-            return 'mp3';
-        }
-
-        // Resilient fetch with timeouts (used by Invidious requests)
-        async function fetchWithTimeout(url, options = {}, timeoutMs = 7000) {
-            const controller = new AbortController();
-            const id = setTimeout(() => controller.abort(), timeoutMs);
-            try {
-                return await fetch(url, { ...options, signal: controller.signal });
-            } finally {
-                clearTimeout(id);
-            }
-        }
-
-        // Invidious instances to try (ordered by typical reliability)
-        const INVIDIOUS_INSTANCES = [
-            'https://yewtu.be',
-            'https://invidious.privacydev.net',
-            'https://inv.nadeko.net',
-            'https://invidious.lunar.icu',
-            'https://vid.puffyan.us'
-        ];
-
-        // Prefer common audio itags: 251 (webm/opus ~160kbps), 140 (m4a ~128kbps), 250/249 (lower opus)
-    const PREFERRED_AUDIO_ITAGS = [140, 251, 250, 249];
-
-        async function probeInvidiousUrl(url) {
-            // Register URL with server and probe via same-origin proxy to avoid CORS
-            const regResp = await fetch('/register_proxy', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url })
-            });
-            const regData = await regResp.json().catch(() => ({}));
-            if (!regResp.ok || !regData.success || !regData.proxy_id) {
-                return null;
-            }
-            const proxyId = regData.proxy_id;
-            const resp = await fetchWithTimeout(`/stream_proxy/${proxyId}`, {
-                method: 'GET',
-                headers: { 'Range': 'bytes=0-0' }
-            }, 8000);
-            if (resp.ok || resp.status === 206) return { proxyId };
-            return null;
-        }
-
-        async function getInvidiousAudioUrl(videoId, excludeSet) {
-            let lastError = null;
-            const excluded = excludeSet || new Set();
-            for (const base of INVIDIOUS_INSTANCES) {
-                for (const itag of PREFERRED_AUDIO_ITAGS) {
-                    const comboKey = `${base}|${itag}`;
-                    if (excluded.has(comboKey)) continue;
-                    const url = `${base}/latest_version?id=${encodeURIComponent(videoId)}&itag=${itag}&local=true`;
-                    try {
-            const result = await probeInvidiousUrl(url);
-                        if (result && result.proxyId) return { url, proxyId: result.proxyId, debug: { base, itag } };
-                    } catch (e) {
-                        lastError = e;
-                        // try next itag/instance
-                    }
-                }
-            }
-            throw lastError || new Error('No working Invidious audio stream found');
-        }
-
-        async function addSongViaClient(result, buttonElement) {
-            const videoId = result.video_id;
-            const metadata = result.metadata;
-            const imageUrl = (metadata && (metadata.image || metadata.image_url)) || '';
-
-            try {
-                // --- Step 1: Resolve an audio stream via Invidious ---
-                buttonElement.textContent = 'Fetching...';
-                const excluded = new Set();
-                let inv = await getInvidiousAudioUrl(videoId, excluded);
-                let audioDownloadUrl = inv.url;
-
-                // --- Step 2: Register the URL with server and download via same-origin proxy to bypass CORS ---
-                buttonElement.textContent = 'Preparing...';
-                let proxyId = inv.proxyId;
-                if (!proxyId) {
-                    // Fallback: register now if probe didn’t provide it (shouldn’t happen now)
-                    const regResp = await fetch('/register_proxy', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ url: audioDownloadUrl })
-                    });
-                    const regData = await regResp.json();
-                    if (!regResp.ok || !regData.success || !regData.proxy_id) {
-                        throw new Error(regData.error || 'Failed to register proxy URL');
-                    }
-                    proxyId = regData.proxy_id;
-                }
-
-                // Now download the audio through our Range-aware proxy (same-origin, CORS-safe)
-                buttonElement.textContent = 'Downloading...';
-                let audioResponse = await fetchWithTimeout(`/stream_proxy/${proxyId}`, { mode: 'cors' }, 20000);
-                // If upstream forbids (mapped to 502) or true 403, try a different instance/itag
-                let retries = 0;
-                const maxRetries = Math.min(INVIDIOUS_INSTANCES.length * PREFERRED_AUDIO_ITAGS.length - 1, 5);
-                while ((audioResponse.status === 502 || audioResponse.status === 403) && retries < maxRetries) {
-                    retries++;
-                    excluded.add(`${inv.debug.base}|${inv.debug.itag}`);
-                    buttonElement.textContent = `Retrying ${retries}/${maxRetries}...`;
-                    inv = await getInvidiousAudioUrl(videoId, excluded);
-                    audioDownloadUrl = inv.url;
-                    proxyId = inv.proxyId || proxyId;
-                    if (!inv.proxyId) {
-                        const regResp2 = await fetch('/register_proxy', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ url: audioDownloadUrl })
-                        });
-                        const regData2 = await regResp2.json();
-                        if (!regResp2.ok || !regData2.success || !regData2.proxy_id) {
-                            throw new Error(regData2.error || 'Failed to register proxy URL');
-                        }
-                        proxyId = regData2.proxy_id;
-                    }
-                    audioResponse = await fetchWithTimeout(`/stream_proxy/${proxyId}`, { mode: 'cors' }, 20000);
-                }
-                if (!audioResponse.ok) {
-                    throw new Error(`Download failed (${audioResponse.status})`);
-                }
-                const contentType = audioResponse.headers.get('Content-Type') || '';
-                const ext = guessAudioExtension(contentType);
-                const audioBlob = await audioResponse.blob();
-
-                // --- Step 3: Upload that Blob to your server's /upload endpoint ---
-                buttonElement.textContent = 'Uploading...';
-                const formData = new FormData();
-                const safeArtist = (metadata.artist || 'Unknown Artist').replace(/[<>:"/\\|?*]+/g, ' ').trim();
-                const safeTitle = (metadata.title || 'Unknown Title').replace(/[<>:"/\\|?*]+/g, ' ').trim();
-                const fileName = `${safeArtist} - ${safeTitle}.${ext}`; // Accurate extension from content-type
-                formData.append('audio', audioBlob, fileName);
-                formData.append('room', roomId);
-                formData.append('title', metadata.title || '');
-                formData.append('artist', metadata.artist || '');
-                formData.append('album', metadata.album || '');
-                formData.append('image_url', imageUrl);
-                formData.append('video_id', videoId || '');
-
-                const uploadResponse = await fetch('/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const uploadResult = await uploadResponse.json();
-
-                if (uploadResult.success) {
-                    buttonElement.textContent = 'Added!';
-                    setTimeout(() => closeSearchModal(), 500); // Close modal on success
-                } else {
-                    throw new Error(uploadResult.error || 'Upload to server failed.');
-                }
-
-            } catch (error) {
-                console.error('Failed to add song via client:', error);
-                let msg = 'Error';
-                const errStr = String(error).toLowerCase();
-                if (errStr.includes('failed to fetch') || errStr.includes('resolve') || errStr.includes('abort')) {
-                    msg = 'Network/DNS error';
-                } else if (errStr.includes('no working invidious') || errStr.includes('no audio')) {
-                    msg = 'No audio found';
-                }
-                buttonElement.textContent = msg;
-                buttonElement.style.backgroundColor = '#d32f2f';
-                setTimeout(() => {
-                    buttonElement.textContent = 'Add';
-                    buttonElement.disabled = false;
-                    buttonElement.style.backgroundColor = '';
-                }, 3500);
-            }
-        }
-
-        async function downloadAndAddToQueue(result) {
-            try {
-                await fetch('/add_to_queue', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        room: roomId,
-                        proxy_id: result.proxy_id,
-                        metadata: result.metadata,
-                        video_id: result.video_id
-                    })
-                });
-            } catch (err) {
-                console.error('Failed to add song to queue:', err);
             }
         }
 
@@ -5045,7 +5203,6 @@ function ensureFullscreenContrast() {
     const songArtistText = document.querySelector('#song-artist');
     const roomCodeDisplay = document.querySelector('.room-code-display');
     const audioflowHeading = document.querySelector('h1.main-heading'); // More specific selector
-    const memberCount = document.querySelector('.member-count'); // Member count element
     const bodyBg = window.getComputedStyle(document.body).backgroundColor;
     console.log('Body background color:', bodyBg);
     
@@ -5053,8 +5210,21 @@ function ensureFullscreenContrast() {
     const contrastColor = bgBrightness > 128 ? 'black' : 'white';
     console.log(`Background brightness: ${bgBrightness}, using contrast color: ${contrastColor}`);
     
-    // Force apply contrast color to ALL text elements regardless of similarity check
-    [mainHeading, songTitleText, songArtistText, roomCodeDisplay, audioflowHeading, memberCount].forEach(el => {
+    // Keep AudioFlow heading always white
+    [mainHeading, audioflowHeading].forEach(el => {
+        if (!el) return;
+        console.log(`Force setting ${el.className || el.id || el.tagName} to white (always)`);
+        el.style.setProperty('color', 'white', 'important');
+        el.removeAttribute('data-fixed-color');
+        el.style.removeProperty('background');
+        el.style.removeProperty('background-image');
+        el.style.removeProperty('-webkit-background-clip');
+        el.style.removeProperty('-webkit-text-fill-color');
+        el.style.removeProperty('background-clip');
+    });
+    
+    // Apply contrast color to other text elements
+    [songTitleText, songArtistText, roomCodeDisplay].forEach(el => {
         if (!el) return;
         console.log(`Force setting ${el.className || el.id || el.tagName} to ${contrastColor}`);
         el.style.setProperty('color', contrastColor, 'important');
