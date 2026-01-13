@@ -1,15 +1,39 @@
-Flask
-Flask-SocketIO[redis]
-python-socketio
-mutagen
-gunicorn
-eventlet
-uuid
-redis
-syncedlyrics
+# Core Flask application
+Flask==2.3.3
+Flask-SocketIO==5.3.6
+eventlet==0.33.3
+gunicorn==21.2.0
+Werkzeug==2.3.7
+
+# Audio file processing
+mutagen==1.47.0
+
+# Database and caching
+redis==5.0.1
+
+# SocketIO dependencies
+python-engineio==4.7.1
+python-socketio==5.9.0
+
+# HTTP requests and networking
+requests==2.31.0
+urllib3>=1.26.0
+
+# Music services integration
+ytmusicapi>=1.7.0
+pydes>=2.0.1
+
+# Lyrics fetching
+syncedlyrics>=1.0.0
+
+# Environment and configuration
 python-dotenv==1.0.0
-ytmusicapi
-yt-dlp
-Pillow
-numpy
-pyDes
+
+# Image processing
+Pillow>=9.0.0
+
+# Data processing
+numpy>=1.24.0
+
+# Standard library (included in Python but listed for clarity)
+# json, base64, os, time, mimetypes, uuid, traceback, urllib.parse, re, random, io, threading
