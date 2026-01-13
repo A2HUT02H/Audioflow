@@ -1,7 +1,3 @@
-# --- CRITICAL: Eventlet monkey patching must happen first ---
-import eventlet
-eventlet.monkey_patch()
-
 # --- Standard Library Imports ---
 import os
 import time
@@ -16,10 +12,9 @@ from threading import Lock
 
 # --- Third-Party Imports ---
 from flask import Flask, render_template, request, redirect, url_for, send_from_directory, jsonify
-# --- IMPORTANT: We still import 'rooms' here, but now it won't conflict ---
 from flask_socketio import SocketIO, emit, join_room, leave_room, rooms
-from mutagen import File as MutagenFile
-from mutagen.id3 import APIC
+from mutagen._file import File as MutagenFile
+from mutagen.id3._frames import APIC
 from mutagen.mp4 import MP4Cover
 import requests
 from requests.adapters import HTTPAdapter
@@ -31,12 +26,14 @@ import time as _time
 from collections import OrderedDict
 import concurrent.futures
 from PIL import Image
-import io
 from ytmusicapi import YTMusic
 import base64
 import json
 try:
-    from Crypto.Cipher import AES
+    try:
+        from Crypto.Cipher import AES
+    except ImportError:
+        AES = None  # Handle missing pycryptodome gracefully
 except ImportError:
     AES = None
 # --- Configure optimized HTTP session for downloads ---
@@ -156,7 +153,10 @@ def download_with_range_requests(url, filepath, room):
 
 # --- Load environment variables from .env file if it exists ---
 try:
-    from dotenv import load_dotenv
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        load_dotenv = None  # Handle missing python-dotenv gracefully
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
     if os.path.exists(env_path):
         load_dotenv(env_path)
@@ -180,19 +180,13 @@ ALLOWED_EXTENSIONS = {'mp3', 'wav', 'ogg', 'flac', 'm4a', 'webm', 'opus', 'aac'}
 
 app = Flask(__name__, static_url_path='/static')
 app.config['SECRET_KEY'] = 'secret!'
+socketio = SocketIO(app, async_mode="threading")
+print("SocketIO async_mode ->", socketio.async_mode)
+
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['JSON_AS_ASCII'] = False  # Ensure Unicode characters are not escaped in JSON responses
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 31536000  # Cache static files for 1 year
-
-redis_url = os.environ.get('REDIS_URL')
-socketio = SocketIO(
-    app,
-    async_mode='eventlet',
-    message_queue=redis_url,
-    ping_timeout=10,
-    ping_interval=5
-)
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
@@ -986,6 +980,7 @@ def _decrypt_jiosaavn_url(encrypted_url: str) -> str:
         print(f"[DEBUG] DES decryption failed: {e}")
         # Fallback to original approach if DES fails
         try:
+            import base64
             b = base64.b64decode(encrypted_url)
             if b and AES:
                 key = b"38346591b33b8f58"  # 16 bytes
@@ -1001,6 +996,7 @@ def _decrypt_jiosaavn_url(encrypted_url: str) -> str:
             pass
         # Final fallback: simple base64 -> text
         try:
+            import base64
             decoded = base64.b64decode(encrypted_url).decode('utf-8', errors='ignore')
             if decoded.startswith('http'):
                 return decoded
@@ -1052,20 +1048,20 @@ def _pick_jiosaavn_media(song_obj: dict, preferred=['320kbps','160kbps','128kbps
 
 @app.route('/search_jiosaavn')
 def search_jiosaavn():
-    """Search songs on JioSaavn using autocomplete.get like vendz/jiosaavn-api"""
+    """Search songs on JioSaavn using search.getResults for comprehensive results"""
     q = request.args.get('q')
     if not q:
         return jsonify({'success': False, 'error': 'q parameter required'}), 400
     
-    # Use vendz autocomplete.get endpoint for consistency
-    # Remove 'cc': 'in' restriction to allow international content
+    # Use search.getResults for comprehensive song search (not just autocomplete)
     params = {
-        '__call': 'autocomplete.get',
-        'query': q,
+        '__call': 'search.getResults',
+        'q': q,
         '_format': 'json',
         '_marker': '0',
         'ctx': 'web6dot0',
-        'includeMetaTags': '1'
+        'n': '20',  # Number of results (increased from default)
+        'p': '1'    # Page number
     }
     try:
         r = download_session.get(JIOSAAVN_API, params=params, headers=_jio_headers(), timeout=10)
@@ -1119,9 +1115,14 @@ def search_jiosaavn():
             print(f"[DEBUG] Response text preview: {r.text[:200]}...")
             return jsonify({'success': False, 'error': 'failed to parse response'}), 502
         
-        songs = data.get('songs', {}).get('data', [])
+        # search.getResults returns {results: [...]} directly, not {songs: {data: [...]}}
+        songs = data.get('results', [])
+        # Fallback to autocomplete format if results not found
+        if not songs:
+            songs = data.get('songs', {}).get('data', [])
+        
         results = []
-        for s in songs[:12]:
+        for s in songs[:20]:  # Increased limit to 20
             # Format like vendz approach
             more_info = s.get('more_info', {})
             results.append({
@@ -1629,15 +1630,31 @@ def upload():
             
         with thread_lock:
             # Create audio item for queue
+            # Derive title/artist with fallbacks and filename heuristics
+            parsed_title = client_title or metadata.get('title')
+            parsed_artist = client_artist or metadata.get('artist')
+
+            if not parsed_title:
+                base_name = os.path.splitext(original_filename)[0]
+                parts = [p.strip() for p in base_name.replace('_', ' ').split('-')]
+                if len(parts) >= 2:
+                    # Assume pattern: Artist - Title
+                    if not parsed_artist:
+                        parsed_artist = parts[0]
+                    parsed_title = ' - '.join(parts[1:])
+                else:
+                    parsed_title = base_name.replace('_', ' ').strip()
+
+            display_name = parsed_title or original_filename
+
             audio_item = {
                 'filename': filename,
-                'filename_display': original_filename,
+                'filename_display': display_name,
                 'cover': final_cover_filename,
                 'upload_time': time.time(),
-                'title': client_title or metadata.get('title'),
-                'artist': client_artist or metadata.get('artist'),
+                'title': parsed_title,
+                'artist': parsed_artist,
                 'album': client_album or metadata.get('album'),
-                # align with stream fields for UI consistency
                 'is_stream': False,
                 'image_url': client_image_url,
                 'video_id': client_video_id
@@ -1657,10 +1674,10 @@ def upload():
                 rooms_data[room]['current_index'] = len(rooms_data[room]['queue']) - 1
                 rooms_data[room].update({
                     'current_file': filename,
-                    'current_file_display': original_filename,
+                    'current_file_display': display_name,
                     'current_cover': final_cover_filename,
-                    'current_title': audio_item.get('title'),
-                    'current_artist': audio_item.get('artist'),
+                    'current_title': parsed_title,
+                    'current_artist': parsed_artist,
                     'current_album': audio_item.get('album'),
                     'is_playing': False,
                     'last_progress_s': 0,
@@ -1672,10 +1689,10 @@ def upload():
                 # Send both filenames to client for the new current song
                 emit_data = {
                     'filename': filename, 
-                    'filename_display': original_filename,
+                    'filename_display': display_name,
                     'cover': final_cover_filename,
-                    'title': audio_item.get('title'),
-                    'artist': audio_item.get('artist'),
+                    'title': parsed_title,
+                    'artist': parsed_artist,
                     'album': audio_item.get('album'),
                     'is_stream': False,
                     'image_url': client_image_url,
@@ -1751,7 +1768,7 @@ def play_from_queue(room_id, index):
             'current_artist': audio_item.get('artist'),
             'current_album': audio_item.get('album'),
             'current_index': index,
-            'is_playing': False,
+            'is_playing': True,
             'last_progress_s': 0,
             'last_updated_at': time.time(),
             # stream-aware state
@@ -1775,7 +1792,9 @@ def play_from_queue(room_id, index):
         'video_id': audio_item.get('video_id')
     }
     socketio.emit('new_file', emit_data, to=room_id)
-    socketio.emit('pause', {'time': 0}, to=room_id)
+    
+    # Ensure playback starts immediately
+    socketio.emit('play', {'room': room_id}, to=room_id)
     
     # Update queue status
     socketio.emit('queue_update', {
@@ -2115,6 +2134,100 @@ def on_disconnect():
                          rooms_data[room_id]['is_shuffling'] = False
                          rooms_data[room_id]['isLooping'] = False
 
+@socketio.on('remove_from_queue')
+def handle_remove_from_queue(data):
+    """Handle removing a song from the queue via socket."""
+    room_id = data.get('room')
+    index = data.get('index')
+    
+    if room_id not in rooms_data:
+        return
+    
+    with thread_lock:
+        queue = rooms_data[room_id].get('queue', [])
+        current_index = rooms_data[room_id].get('current_index', -1)
+        
+        if index < 0 or index >= len(queue):
+            return
+        
+        # Remove from queue
+        queue.pop(index)
+        
+        # Adjust current_index if necessary
+        if index == current_index:
+            # If we're removing the currently playing song
+            if len(queue) == 0:
+                rooms_data[room_id].update({
+                    'current_file': None,
+                    'current_file_display': None,
+                    'current_cover': None,
+                    'current_title': None,
+                    'current_artist': None,
+                    'current_album': None,
+                    'current_index': -1,
+                    'is_playing': False,
+                    'last_progress_s': 0,
+                })
+            elif index < len(queue):
+                # There is a next song available (it shifted into the current index)
+                new_index = index
+                rooms_data[room_id]['current_index'] = new_index
+                
+                # Play the next song automatically
+                audio_item = queue[new_index]
+                rooms_data[room_id].update({
+                    'current_file': audio_item.get('filename'),
+                    'current_file_display': audio_item.get('filename_display'),
+                    'current_cover': audio_item.get('cover'),
+                    'current_title': audio_item.get('title'),
+                    'current_artist': audio_item.get('artist'),
+                    'current_album': audio_item.get('album'),
+                    'is_playing': True,
+                    'last_progress_s': 0,
+                    'last_updated_at': time.time(),
+                    'current_proxy_id': audio_item.get('proxy_id'),
+                    'current_is_stream': audio_item.get('is_stream', False),
+                    'current_image_url': audio_item.get('image_url')
+                })
+                
+                socketio.emit('new_file', {
+                    'filename': audio_item.get('filename'),
+                    'filename_display': audio_item.get('filename_display'),
+                    'cover': audio_item.get('cover'),
+                    'title': audio_item.get('title'),
+                    'artist': audio_item.get('artist'),
+                    'album': audio_item.get('album'),
+                    'is_playing': True,
+                    'proxy_id': audio_item.get('proxy_id'),
+                    'is_stream': audio_item.get('is_stream', False),
+                    'image_url': audio_item.get('image_url')
+                }, to=room_id)
+                
+                # Ensure playback starts
+                socketio.emit('play', {'room': room_id}, to=room_id)
+            else:
+                # We removed the last song and there is no next song
+                rooms_data[room_id].update({
+                    'current_file': None,
+                    'current_file_display': None,
+                    'current_cover': None,
+                    'current_title': None,
+                    'current_artist': None,
+                    'current_album': None,
+                    'current_index': -1,
+                    'is_playing': False,
+                    'last_progress_s': 0,
+                })
+        elif index < current_index:
+            # Adjust current index since we removed a song before it
+            rooms_data[room_id]['current_index'] = current_index - 1
+    
+    # Emit updated queue to all clients in the room
+    socketio.emit('queue_update', {
+        'queue': rooms_data[room_id].get('queue', []),
+        'current_index': rooms_data[room_id].get('current_index', -1)
+    }, to=room_id)
+
 @socketio.on('client_ping')
 def handle_client_ping():
     """Reply to a client's ping immediately for clock synchronization."""
@@ -2313,6 +2426,67 @@ def handle_previous_song(data):
         'current_index': prev_index
     }, to=room)
 
+@socketio.on('select_song')
+def handle_select_song(data):
+    """Select a specific song in the queue by index and start playing it."""
+    room = data.get('room')
+    index = data.get('index')
+
+    if room not in rooms_data:
+        return
+    if not isinstance(index, int):
+        return
+
+    with thread_lock:
+        queue = rooms_data[room].get('queue', [])
+        if index < 0 or index >= len(queue):
+            return
+
+        audio_item = queue[index]
+        rooms_data[room].update({
+            'current_file': audio_item.get('filename'),
+            'current_file_display': audio_item.get('filename_display'),
+            'current_cover': audio_item.get('cover'),
+            'current_title': audio_item.get('title'),
+            'current_artist': audio_item.get('artist'),
+            'current_album': audio_item.get('album'),
+            'current_index': index,
+            'is_playing': True,
+            'last_progress_s': 0,
+            'last_updated_at': time.time(),
+            'current_proxy_id': audio_item.get('proxy_id'),
+            'current_is_stream': audio_item.get('is_stream', False),
+            'current_image_url': audio_item.get('image_url')
+        })
+
+    emit_data = {
+        'filename': audio_item.get('filename'),
+        'filename_display': audio_item.get('filename_display'),
+        'cover': audio_item.get('cover'),
+        'title': audio_item.get('title'),
+        'artist': audio_item.get('artist'),
+        'album': audio_item.get('album'),
+        'proxy_id': audio_item.get('proxy_id'),
+        'is_stream': audio_item.get('is_stream', False),
+        'image_url': audio_item.get('image_url'),
+        'video_id': audio_item.get('video_id')
+    }
+    socketio.emit('new_file', emit_data, to=room)
+    
+    # Ensure playback starts immediately
+    socketio.emit('play', {'room': room}, to=room)
+
+    target_timestamp = time.time() + 0.5
+    socketio.emit('scheduled_play', {
+        'audio_time': 0,
+        'target_timestamp': target_timestamp
+    }, to=room)
+
+    socketio.emit('queue_update', {
+        'queue': queue,
+        'current_index': index
+    }, to=room)
+
 @socketio.on('loop_toggle')
 def handle_loop_toggle(data):
     """Handle loop state toggle and synchronize across all devices."""
@@ -2479,6 +2653,12 @@ def handle_reorder_queue(data):
 # Now that sync_rooms_periodically is defined above, this line will work correctly.
 socketio.start_background_task(target=sync_rooms_periodically)
 
-if __name__ == '__main__':
-    # This block runs for local development
-    socketio.run(app, host='0.0.0.0', port=5001, debug=True, use_reloader=False)
+if __name__ == "__main__":
+    import webbrowser
+    from threading import Timer
+
+    def open_browser():
+        webbrowser.open_new("http://127.0.0.1:5000/")
+
+    Timer(1, open_browser).start()
+    socketio.run(app, host="0.0.0.0", port=5000, debug=False, allow_unsafe_werkzeug=True)
