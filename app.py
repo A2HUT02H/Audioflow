@@ -6,8 +6,11 @@ import sys
 if "eventlet" in sys.modules or os.environ.get('RENDER') or os.environ.get('PORT') or "gunicorn" in os.environ.get("SERVER_SOFTWARE", ""):
     try:
         import eventlet
-        eventlet.monkey_patch()
-        print("Eventlet monkey-patched successfully.")
+        # Disable Eventlet's custom buggy DNS resolver which fails inside Docker/Render
+        os.environ["EVENTLET_NO_GREENDNS"] = "yes"
+        # Monkey patch everything except 'os' to prevent NameResolutionError in requests
+        eventlet.monkey_patch(os=False)
+        print("Eventlet monkey-patched successfully. Native DNS enabled.")
     except ImportError:
         pass
 
