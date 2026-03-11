@@ -1,5 +1,16 @@
 # --- Standard Library Imports ---
 import os
+import sys
+
+# Eventlet monkey-patching must happen BEFORE any other imports
+if "eventlet" in sys.modules or os.environ.get('RENDER') or os.environ.get('PORT') or "gunicorn" in os.environ.get("SERVER_SOFTWARE", ""):
+    try:
+        import eventlet
+        eventlet.monkey_patch()
+        print("Eventlet monkey-patched successfully.")
+    except ImportError:
+        pass
+
 import time
 import mimetypes
 import uuid
@@ -180,7 +191,11 @@ ALLOWED_EXTENSIONS = {'mp3', 'wav', 'ogg', 'flac', 'm4a', 'webm', 'opus', 'aac'}
 
 app = Flask(__name__, static_url_path='/static')
 app.config['SECRET_KEY'] = 'secret!'
-socketio = SocketIO(app, async_mode="threading")
+
+# Determine async mode
+# If running locally without eventlet, it defaults to threading
+# In production with gunicorn and -k eventlet, it uses eventlet
+socketio = SocketIO(app, cors_allowed_origins="*")
 print("SocketIO async_mode ->", socketio.async_mode)
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
