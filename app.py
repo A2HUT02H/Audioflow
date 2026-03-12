@@ -40,7 +40,6 @@ import time as _time
 from collections import OrderedDict
 import concurrent.futures
 from PIL import Image
-from ytmusicapi import YTMusic
 import base64
 import json
 try:
@@ -195,10 +194,15 @@ ALLOWED_EXTENSIONS = {'mp3', 'wav', 'ogg', 'flac', 'm4a', 'webm', 'opus', 'aac'}
 app = Flask(__name__, static_url_path='/static')
 app.config['SECRET_KEY'] = 'secret!'
 
-# Determine async mode
-# If running locally without eventlet, it defaults to threading
-# In production with gunicorn and -k eventlet, it uses eventlet
-socketio = SocketIO(app, cors_allowed_origins="*")
+# Determine async mode:
+# Use eventlet only in production (gunicorn / Render), threading locally.
+# This avoids eventlet's ssl.wrap_socket incompatibility with Python 3.13+.
+if os.environ.get('RENDER') or "gunicorn" in os.environ.get("SERVER_SOFTWARE", ""):
+    _async_mode = 'eventlet'
+else:
+    _async_mode = 'threading'
+
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode=_async_mode)
 print("SocketIO async_mode ->", socketio.async_mode)
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -473,27 +477,14 @@ def serve_file(filename):
 
 
 # ==================================================================
-# YouTube Music search + streaming proxy support
+# Streaming proxy support
 # ==================================================================
-# Configuration for YouTube Music API
-USE_MOCK_API = os.environ.get('USE_MOCK_YTMUSIC', 'false').lower() == 'true'
 
 # Simple in-memory mapping for resolved download links with expiry
 # key: proxy_id, value: { 'url': original_url, 'expires_at': timestamp }
 proxy_url_map = OrderedDict()
 proxy_lock = threading.Lock()
-PROXY_TTL = int(os.environ.get('YTMUSIC_PROXY_TTL', '300'))  # seconds
-
-# Initialize YouTube Music API client
-ytmusic = None
-try:
-    if not USE_MOCK_API:
-        ytmusic = YTMusic()
-        print("[DEBUG] YouTube Music API initialized successfully")
-except Exception as e:
-    print(f"[DEBUG] Failed to initialize YouTube Music API: {e}")
-    print("[DEBUG] Falling back to mock mode")
-    USE_MOCK_API = True
+PROXY_TTL = int(os.environ.get('PROXY_TTL', '300'))  # seconds
 
 def cleanup_proxy_map():
     """Background cleaner for expired proxy entries."""
@@ -551,53 +542,6 @@ def register_proxy():
     except Exception as e:
         print(f"[DEBUG] register_proxy error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
-
-def enhance_youtube_thumbnail_quality(url, video_id=None):
-    """
-    Get YouTube thumbnail using the high-quality URL format and extract video ID if needed.
-    Uses the format: https://img.youtube.com/vi/{video_id}/maxresdefault.jpg
-    """
-    try:
-        # If video_id is provided directly, use it
-        if video_id:
-            print(f"[DEBUG] Using provided video_id: {video_id}")
-            return f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg"
-        
-        # Extract video ID from any YouTube URL
-        if not url or 'youtube' not in url.lower() and 'ytimg' not in url.lower():
-            return url
-        
-        extracted_video_id = None
-        
-        # Try multiple patterns to extract video ID
-        patterns = [
-            r'/vi/([^/]+)/',              # i.ytimg.com format
-            r'vi/([^/]+)/[^/]+\.jpg',     # Alternative ytimg format
-            r'videoId[=/]([a-zA-Z0-9_-]{11})',  # Direct video ID
-            r'v[=/]([a-zA-Z0-9_-]{11})',  # YouTube URL format
-            r'([a-zA-Z0-9_-]{11})',       # Any 11-character string (video ID pattern)
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                potential_id = match.group(1)
-                # Validate it's a proper YouTube video ID (11 characters, alphanumeric + _ -)
-                if len(potential_id) == 11 and re.match(r'^[a-zA-Z0-9_-]+$', potential_id):
-                    extracted_video_id = potential_id
-                    break
-        
-        if extracted_video_id:
-            high_quality_url = f"https://img.youtube.com/vi/{extracted_video_id}/maxresdefault.jpg"
-            print(f"[DEBUG] Generated high-quality URL: {high_quality_url}")
-            return high_quality_url
-        
-        print(f"[DEBUG] Could not extract video ID from URL: {url}")
-        return url
-        
-    except Exception as e:
-        print(f"[DEBUG] Error enhancing thumbnail URL: {e}")
-        return url
 
 def crop_image_to_square(image_data):
     """
@@ -821,130 +765,6 @@ def stream_remote_range(url):
     if status == 403:
         status = 502
     return generate(), status, upstream_headers
-
-
-@app.route('/search_ytmusic')
-def search_ytmusic():
-    """Search via YouTube Music API. Returns metadata and a proxy id for streaming.
-
-    Query params: q (search term)
-    """
-    print(f"[DEBUG] USE_MOCK_API: {USE_MOCK_API}")
-    
-    q = request.args.get('q')
-    if not q:
-        return jsonify({'success': False, 'error': 'q parameter required'}), 400
-
-    # Mock API for testing when no real API is available
-    if USE_MOCK_API:
-        # Return mock data for testing - multiple results
-        search_limit = 5 # Hardcoded to 5 results
-        mock_results = []
-        
-        for i in range(min(search_limit, 3)):  # Generate up to 3 mock results
-            mock_data = {
-                'title': f'Mock Song {i+1} - {q}',
-                'artist': f'Mock Artist {i+1}',
-                'image': 'https://via.placeholder.com/300x300.png?text=Mock+Cover',
-                'download': 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',  # Free test MP3
-                'duration': 180 + i * 30,  # Different durations
-                'album': f'Mock Album {i+1}' if i > 0 else ''
-            }
-            
-            proxy_id = add_proxy_url(mock_data['download'])
-            mock_results.append({
-                'proxy_id': proxy_id,
-                'metadata': {
-                    'title': mock_data['title'],
-                    'artist': mock_data['artist'],
-                    'image': mock_data['image'],
-                    'duration': mock_data['duration'],
-                    'album': mock_data['album']
-                },
-                'video_id': f'mock_video_{i+1}',
-                'expires_in': PROXY_TTL
-            })
-        
-        return jsonify({
-            'success': True,
-            'results': mock_results,
-            'total': len(mock_results),
-            'note': 'Using mock data for testing'
-        })
-
-    # Real YouTube Music API code
-    try:
-        if not ytmusic:
-            return jsonify({'success': False, 'error': 'YouTube Music API not available'}), 500
-
-        # Search for songs - get multiple results
-        search_limit = 5  # Hardcoded to 5 results
-        search_results = ytmusic.search(q, filter='songs', limit=search_limit)
-
-        if not search_results:
-            return jsonify({'success': False, 'error': 'No results found'}), 404
-
-        # Process up to 5 results
-        processed_results = []
-        for song in search_results[:5]:
-            video_id = song.get('videoId')
-
-            if not video_id:
-                continue  # Skip results without video ID
-
-            # Extract metadata
-            artists = song.get('artists', [])
-            if isinstance(artists, list) and artists:
-                artist_str = ', '.join([artist.get('name', 'Unknown') for artist in artists])
-            else:
-                artist_str = 'Unknown Artist'
-
-            # Get thumbnail - use the specific format with video_id for high quality
-            thumbnails = song.get('thumbnails', [])
-            image_url = ''
-            if video_id:
-                # Use the specific YouTube thumbnail format
-                image_url = enhance_youtube_thumbnail_quality(None, video_id)
-                print(f"[DEBUG] Using high-quality thumbnail URL: {image_url}")
-            elif thumbnails:
-                # Fallback to thumbnails from API and enhance them
-                sorted_thumbnails = sorted(thumbnails, key=lambda x: (x.get('width', 0) * x.get('height', 0)), reverse=True)
-                if sorted_thumbnails:
-                    best_thumbnail = sorted_thumbnails[0]
-                    raw_url = best_thumbnail.get('url', '')
-                    print(f"[DEBUG] Selected thumbnail: {best_thumbnail.get('width', 'unknown')}x{best_thumbnail.get('height', 'unknown')} - {raw_url}")
-                    image_url = enhance_youtube_thumbnail_quality(raw_url)
-                else:
-                    raw_url = thumbnails[-1].get('url', '')
-                    image_url = enhance_youtube_thumbnail_quality(raw_url)
-
-            metadata = {
-                'title': song.get('title', 'Unknown Title'),
-                'artist': artist_str,
-                'image': image_url,
-                'image_url': image_url,
-                'duration': song.get('duration_seconds'),
-                'album': song.get('album', {}).get('name', '') if song.get('album') else ''
-            }
-
-            # Do not resolve audio URLs server-side; client will handle via third-party API
-            processed_results.append({
-                'metadata': metadata,
-                'video_id': video_id
-            })
-
-        if not processed_results:
-            return jsonify({'success': False, 'error': 'No valid results found'}), 404
-
-        return jsonify({
-            'success': True,
-            'results': processed_results,
-            'total': len(processed_results)
-        })
-
-    except Exception as e:
-        print(f"Error querying YouTube Music API: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # ==================================================================
