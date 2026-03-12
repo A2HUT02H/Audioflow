@@ -5,10 +5,12 @@ import sys
 # Eventlet monkey-patching must happen BEFORE any other imports
 if "eventlet" in sys.modules or os.environ.get('RENDER') or os.environ.get('PORT') or "gunicorn" in os.environ.get("SERVER_SOFTWARE", ""):
     try:
-        import eventlet
-        # Disable Eventlet's custom buggy DNS resolver which fails inside Docker/Render
+        # MUST be set before importing eventlet — it checks this at import time.
+        # Without this, eventlet replaces the system DNS resolver with its own green
+        # DNS implementation which fails inside Docker/Render with NameResolutionError.
         os.environ["EVENTLET_NO_GREENDNS"] = "yes"
-        # Monkey patch everything except 'os' to prevent NameResolutionError in requests
+        import eventlet
+        # Monkey patch everything except 'os' to keep native DNS for requests
         eventlet.monkey_patch(os=False)
         print("Eventlet monkey-patched successfully. Native DNS enabled.")
     except ImportError:
