@@ -88,6 +88,23 @@ def create_download_session():
 # Global download session
 download_session = create_download_session()
 
+def _tpool_execute(func, *args, **kwargs):
+    """
+    Run `func` in a real OS thread via eventlet.tpool when running under eventlet.
+
+    On Render / gunicorn+eventlet, the gunicorn worker does its own monkey-patch
+    before app code loads, replacing the standard socket with green sockets whose
+    DNS resolver fails in Render's network ([Errno -3] Lookup timed out).
+    eventlet.tpool spawns a native thread that is NOT subject to green-socket
+    patching, so DNS and HTTP work normally inside it.
+    Falls back to a direct call when eventlet is not present (local/threading mode).
+    """
+    try:
+        import eventlet.tpool
+        return eventlet.tpool.execute(func, *args, **kwargs)
+    except Exception:
+        return func(*args, **kwargs)
+
 ## Removed: server-side yt-dlp download helper and any direct YouTube fetching.
 
 def download_with_range_requests(url, filepath, room):
@@ -352,7 +369,8 @@ def get_lyrics(artist, title):
     
     try:
         # Use syncedlyrics to get timestamped lyrics
-        lrc_lyrics = syncedlyrics.search(f"{artist} {title}")
+        # _tpool_execute ensures real OS thread DNS on Render/eventlet
+        lrc_lyrics = _tpool_execute(syncedlyrics.search, f"{artist} {title}")
         
         if lrc_lyrics and lrc_lyrics.strip():
             print(f"Found timestamped lyrics for {artist} - {title}")
@@ -706,7 +724,7 @@ def stream_remote_range(url):
     # Stream from upstream
     print(f"[DEBUG] Making request to upstream URL...")
     # Use the optimized shared session; allow redirects
-    upstream = download_session.get(url, headers=headers, stream=True, timeout=20, allow_redirects=True)
+    upstream = _tpool_execute(download_session.get, url, headers=headers, stream=True, timeout=20, allow_redirects=True)
     # Some upstreams (Invidious instances) may reject Range for tiny probes. If 403/416 and we had Range, retry without Range.
     if upstream.status_code in (403, 416) and 'Range' in headers:
         try:
@@ -715,7 +733,7 @@ def stream_remote_range(url):
         except Exception:
             pass
         hdr_no_range = {k: v for k, v in headers.items() if k.lower() != 'range'}
-        upstream = download_session.get(url, headers=hdr_no_range, stream=True, timeout=20, allow_redirects=True)
+        upstream = _tpool_execute(download_session.get, url, headers=hdr_no_range, stream=True, timeout=20, allow_redirects=True)
     print(f"[DEBUG] Upstream response status: {upstream.status_code}")
     print(f"[DEBUG] Upstream response headers: {dict(upstream.headers)}")
 
@@ -904,7 +922,7 @@ def search_jiosaavn():
         'p': '1'    # Page number
     }
     try:
-        r = download_session.get(JIOSAAVN_API, params=params, headers=_jio_headers(), timeout=10)
+        r = _tpool_execute(download_session.get, JIOSAAVN_API, params=params, headers=_jio_headers(), timeout=10)
         if r.status_code != 200:
             return jsonify({'success': False, 'error': f'upstream {r.status_code}'}), 502
         
@@ -1011,7 +1029,7 @@ def resolve_jiosaavn():
     try:
         song = None
         if params:
-            r = download_session.get(JIOSAAVN_API, params=params, headers=_jio_headers(), timeout=10)
+            r = _tpool_execute(download_session.get, JIOSAAVN_API, params=params, headers=_jio_headers(), timeout=10)
             if r.status_code == 200:
                 # Try multiple JSON parsing approaches for robustness
                 data = None
@@ -1122,7 +1140,7 @@ def universal_result():
                 'includeMetaTags': '1'
             }
             
-            r = download_session.get(JIOSAAVN_API, params=params, headers=_jio_headers(), timeout=10)
+            r = _tpool_execute(download_session.get, JIOSAAVN_API, params=params, headers=_jio_headers(), timeout=10)
             if r.status_code != 200:
                 return jsonify({'success': False, 'message': f'upstream {r.status_code}', 'data': []})
             
@@ -1166,7 +1184,7 @@ def universal_result():
                             '_format': 'json',
                             '_marker': '0'
                         }
-                        detail_r = download_session.get(JIOSAAVN_API, params=details_params, headers=_jio_headers(), timeout=5)
+                        detail_r = _tpool_execute(download_session.get, JIOSAAVN_API, params=details_params, headers=_jio_headers(), timeout=5)
                         if detail_r.status_code == 200:
                             detail_text = detail_r.text.encode().decode('unicode-escape')
                             detail_data = json.loads(detail_text)
@@ -1206,7 +1224,7 @@ def universal_result():
                                             'ctx': 'web6dot0',
                                             'api_version': '4'
                                         }
-                                        lyrics_r = download_session.get(JIOSAAVN_API, params=lyrics_params, headers=_jio_headers(), timeout=5)
+                                        lyrics_r = _tpool_execute(download_session.get, JIOSAAVN_API, params=lyrics_params, headers=_jio_headers(), timeout=5)
                                         if lyrics_r.status_code == 200:
                                             lyrics_data = lyrics_r.json()
                                             formatted_song['lyrics'] = lyrics_data.get('lyrics', '')
@@ -1270,7 +1288,7 @@ def image_proxy():
         return jsonify({'success': False, 'error': 'url query param required'}), 400
     try:
         # Stream image from upstream
-        r = download_session.get(img_url, stream=True, timeout=15)
+        r = _tpool_execute(download_session.get, img_url, stream=True, timeout=15)
         if r.status_code >= 400:
             return jsonify({'success': False, 'error': f'upstream returned {r.status_code}'}), 502
 
