@@ -224,6 +224,30 @@ else:
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode=_async_mode)
 print("SocketIO async_mode ->", socketio.async_mode)
 
+# ---------------------------------------------------------------------------
+# DNS FIX for Render / gunicorn + eventlet
+# ---------------------------------------------------------------------------
+# Problem: gunicorn's eventlet worker calls eventlet.monkey_patch() BEFORE
+# your app is imported, replacing socket.getaddrinfo with eventlet's custom
+# green DNS resolver (powered by dnspython). That resolver fails on Render
+# with "[Errno -3] Lookup timed out".
+#
+# Fix: Replace socket.getaddrinfo with _socket.getaddrinfo — the C-extension
+# function that eventlet CANNOT monkey-patch. This makes requests/syncedlyrics
+# use the real OS DNS resolver. Green socket I/O (needed for SocketIO) is
+# unaffected because only name resolution is changed, not the I/O itself.
+# ---------------------------------------------------------------------------
+try:
+    import _socket as _csocket
+    import socket as _socket_ref
+    if _socket_ref.getaddrinfo is not _csocket.getaddrinfo:
+        _socket_ref.getaddrinfo = _csocket.getaddrinfo
+        print("[DNS] Restored C-level getaddrinfo — bypassed eventlet green DNS")
+    else:
+        print("[DNS] getaddrinfo is already the C-level function — no patch needed")
+except Exception as _dns_err:
+    print(f"[DNS] DNS restore skipped: {_dns_err}")
+
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['JSON_AS_ASCII'] = False  # Ensure Unicode characters are not escaped in JSON responses
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
@@ -233,6 +257,19 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # --- CHANGED: Renamed the dictionary to avoid name collision ---
 rooms_data = {}
+
+# Audio role assignments for stem playback
+AUDIO_ROLE_MIX = 'mix'
+AUDIO_ROLE_VOCALS = 'vocals'
+AUDIO_ROLE_INSTRUMENTAL = 'instrumental'
+VALID_AUDIO_ROLES = {AUDIO_ROLE_MIX, AUDIO_ROLE_VOCALS, AUDIO_ROLE_INSTRUMENTAL}
+
+# Per-device channel routing for stereo tracks
+CHANNEL_MODE_STEREO = 'stereo'
+CHANNEL_MODE_LEFT = 'left'
+CHANNEL_MODE_RIGHT = 'right'
+VALID_CHANNEL_MODES = {CHANNEL_MODE_STEREO, CHANNEL_MODE_LEFT, CHANNEL_MODE_RIGHT}
+MAX_MEMBER_SYNC_REPORT_AGE_S = 8.0
 
 # =================================================================================
 # Function Definitions
@@ -254,6 +291,293 @@ def sync_rooms_periodically():
 def allowed_file(filename):
     """Check if the file's extension is in the allowed list."""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def unicode_secure_filename(filename):
+    """Remove unsafe path characters while preserving unicode file names."""
+    if not filename:
+        return None
+    cleaned = re.sub(r'[/\\]', '', filename)  # Remove path separators
+    cleaned = re.sub(r'[<>:"|?*]', '', cleaned)  # Remove Windows forbidden chars
+    cleaned = cleaned.strip()
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    return cleaned if cleaned else None
+
+def normalize_audio_role(role):
+    """Normalize member role to one of the supported role values."""
+    if isinstance(role, str):
+        cleaned = role.strip().lower()
+        if cleaned in VALID_AUDIO_ROLES:
+            return cleaned
+    return AUDIO_ROLE_MIX
+
+def normalize_channel_mode(mode):
+    """Normalize per-device channel mode to stereo/left/right."""
+    if isinstance(mode, str):
+        cleaned = mode.strip().lower()
+        if cleaned in VALID_CHANNEL_MODES:
+            return cleaned
+    return CHANNEL_MODE_STEREO
+
+def get_member_audio_role(room_id, sid):
+    """Return the assigned role for a socket client in a room."""
+    room_state = rooms_data.get(room_id, {})
+    member = room_state.get('member_list', {}).get(sid, {})
+    return normalize_audio_role(member.get('audio_role'))
+
+def get_member_channel_mode(room_id, sid):
+    """Return the assigned channel mode for a socket client in a room."""
+    room_state = rooms_data.get(room_id, {})
+    member = room_state.get('member_list', {}).get(sid, {})
+    return normalize_channel_mode(member.get('channel_mode'))
+
+def get_room_reference_time_s(room_state, now_ts=None):
+    """Return expected room playback time on the authoritative server timeline."""
+    if not isinstance(room_state, dict):
+        return 0.0
+
+    if now_ts is None:
+        now_ts = time.time()
+
+    try:
+        reference_time = float(room_state.get('last_progress_s', 0) or 0)
+    except (TypeError, ValueError):
+        reference_time = 0.0
+
+    if room_state.get('is_playing'):
+        try:
+            last_updated_at = float(room_state.get('last_updated_at', now_ts) or now_ts)
+        except (TypeError, ValueError):
+            last_updated_at = now_ts
+        reference_time += max(0.0, now_ts - last_updated_at)
+
+    return max(0.0, reference_time)
+
+def compute_member_sync_drift_ms(room_state, member_info, now_ts=None):
+    """Compute member drift in ms: member timeline minus room timeline."""
+    if not isinstance(room_state, dict) or not isinstance(member_info, dict):
+        return None
+
+    has_current_track = bool(room_state.get('current_file') or room_state.get('current_proxy_id'))
+    if not has_current_track:
+        return None
+
+    if now_ts is None:
+        now_ts = time.time()
+
+    reported_time = member_info.get('reported_playback_time_s')
+    reported_at_s = member_info.get('reported_at_s')
+    if reported_time is None or reported_at_s is None:
+        return None
+
+    try:
+        reported_time = float(reported_time)
+        reported_at_s = float(reported_at_s)
+    except (TypeError, ValueError):
+        return None
+
+    if reported_time < 0:
+        return None
+
+    report_age_s = max(0.0, now_ts - reported_at_s)
+    if report_age_s > MAX_MEMBER_SYNC_REPORT_AGE_S:
+        return None
+
+    reported_has_media = bool(member_info.get('reported_has_media', True))
+    if not reported_has_media:
+        return None
+
+    reported_is_playing = bool(member_info.get('reported_is_playing', False))
+    member_now_time = reported_time + report_age_s if reported_is_playing else reported_time
+    room_now_time = get_room_reference_time_s(room_state, now_ts=now_ts)
+
+    drift_ms = int(round((member_now_time - room_now_time) * 1000.0))
+
+    # Guard against corrupted reports producing unusable values.
+    if abs(drift_ms) > 600000:
+        return None
+
+    return drift_ms
+
+def audio_item_to_emit_data(audio_item):
+    """Create canonical track payload from a queue item."""
+    if not audio_item:
+        return {
+            'filename': None,
+            'filename_display': None,
+            'cover': None,
+            'title': None,
+            'artist': None,
+            'album': None,
+            'proxy_id': None,
+            'is_stream': False,
+            'image_url': None,
+            'video_id': None,
+            'stems': None,
+            'is_stem_track': False
+        }
+
+    stems = audio_item.get('stems')
+    if not isinstance(stems, dict):
+        stems = None
+
+    return {
+        'filename': audio_item.get('filename'),
+        'filename_display': audio_item.get('filename_display'),
+        'cover': audio_item.get('cover'),
+        'title': audio_item.get('title'),
+        'artist': audio_item.get('artist'),
+        'album': audio_item.get('album'),
+        'proxy_id': audio_item.get('proxy_id'),
+        'is_stream': audio_item.get('is_stream', False),
+        'image_url': audio_item.get('image_url'),
+        'video_id': audio_item.get('video_id'),
+        'stems': stems,
+        'is_stem_track': bool(stems)
+    }
+
+def resolve_stem_variant(stems, assigned_role):
+    """Select the most appropriate stem variant for a client role."""
+    if not isinstance(stems, dict) or not stems:
+        return None, None
+
+    candidates = [
+        normalize_audio_role(assigned_role),
+        AUDIO_ROLE_MIX,
+        AUDIO_ROLE_VOCALS,
+        AUDIO_ROLE_INSTRUMENTAL,
+    ]
+
+    for role in candidates:
+        entry = stems.get(role)
+        if isinstance(entry, str):
+            entry = {'filename': entry}
+        if isinstance(entry, dict) and entry.get('filename'):
+            return role, entry
+
+    for role, entry in stems.items():
+        if isinstance(entry, str):
+            entry = {'filename': entry}
+        if isinstance(entry, dict) and entry.get('filename'):
+            return role, entry
+
+    return None, None
+
+def resolve_emit_data_for_role(emit_data, assigned_role, assigned_channel_mode=CHANNEL_MODE_STEREO):
+    """Resolve a canonical payload to client-specific file payload based on role and channel mode."""
+    resolved = dict(emit_data or {})
+    normalized_role = normalize_audio_role(assigned_role)
+    normalized_channel_mode = normalize_channel_mode(assigned_channel_mode)
+    resolved['assigned_audio_role'] = normalized_role
+    resolved['assigned_channel_mode'] = normalized_channel_mode
+
+    stems = resolved.get('stems')
+    if isinstance(stems, dict) and stems:
+        vocals_entry = stems.get(AUDIO_ROLE_VOCALS)
+        instrumental_entry = stems.get(AUDIO_ROLE_INSTRUMENTAL)
+        if isinstance(vocals_entry, str):
+            vocals_entry = {'filename': vocals_entry}
+        if isinstance(instrumental_entry, str):
+            instrumental_entry = {'filename': instrumental_entry}
+
+        has_dual_stems = (
+            isinstance(vocals_entry, dict) and vocals_entry.get('filename') and
+            isinstance(instrumental_entry, dict) and instrumental_entry.get('filename')
+        )
+
+        # For mix role, preserve BOTH stems so the client can layer them together.
+        if normalized_role == AUDIO_ROLE_MIX and has_dual_stems:
+            resolved['filename'] = vocals_entry.get('filename')
+            if vocals_entry.get('cover'):
+                resolved['cover'] = vocals_entry.get('cover')
+            resolved['selected_audio_variant'] = AUDIO_ROLE_MIX
+            resolved['is_stem_track'] = True
+            resolved['mix_filenames'] = {
+                AUDIO_ROLE_VOCALS: vocals_entry.get('filename'),
+                AUDIO_ROLE_INSTRUMENTAL: instrumental_entry.get('filename')
+            }
+            resolved['mix_covers'] = {
+                AUDIO_ROLE_VOCALS: vocals_entry.get('cover'),
+                AUDIO_ROLE_INSTRUMENTAL: instrumental_entry.get('cover')
+            }
+            base_display = resolved.get('title') or resolved.get('filename_display') or resolved.get('filename') or 'Unknown'
+            resolved['filename_display'] = f"{base_display} [{AUDIO_ROLE_MIX}]"
+        else:
+            selected_variant, stem_entry = resolve_stem_variant(stems, normalized_role)
+            if stem_entry:
+                resolved['filename'] = stem_entry.get('filename')
+                if stem_entry.get('cover'):
+                    resolved['cover'] = stem_entry.get('cover')
+                resolved['selected_audio_variant'] = selected_variant
+                resolved['is_stem_track'] = True
+                base_display = resolved.get('title') or resolved.get('filename_display') or resolved.get('filename') or 'Unknown'
+                resolved['filename_display'] = f"{base_display} [{selected_variant}]"
+            else:
+                resolved['selected_audio_variant'] = AUDIO_ROLE_MIX
+                resolved['is_stem_track'] = False
+            resolved.pop('mix_filenames', None)
+            resolved.pop('mix_covers', None)
+    else:
+        resolved['selected_audio_variant'] = AUDIO_ROLE_MIX
+        resolved['is_stem_track'] = False
+        resolved.pop('mix_filenames', None)
+        resolved.pop('mix_covers', None)
+
+    resolved.pop('stems', None)
+    return resolved
+
+def emit_new_file_to_member(room_id, sid, emit_data):
+    """Emit a personalized new_file payload to a single socket client."""
+    role = get_member_audio_role(room_id, sid)
+    channel_mode = get_member_channel_mode(room_id, sid)
+    personalized = resolve_emit_data_for_role(emit_data, role, channel_mode)
+    socketio.emit('new_file', personalized, to=sid)
+
+def emit_new_file_to_room(room_id, emit_data):
+    """Emit new_file to all room members with role-specific stem resolution."""
+    room_state = rooms_data.get(room_id, {})
+    member_list = room_state.get('member_list', {})
+
+    if not member_list:
+        # Fallback for edge cases before member tracking is initialized.
+        fallback_payload = resolve_emit_data_for_role(emit_data, AUDIO_ROLE_MIX, CHANNEL_MODE_STEREO)
+        socketio.emit('new_file', fallback_payload, to=room_id)
+        return
+
+    for sid in list(member_list.keys()):
+        emit_new_file_to_member(room_id, sid, emit_data)
+
+def build_room_state_for_member(room_id, sid, base_room_state):
+    """Build room_state payload personalized for the joining member role."""
+    room_state = dict(base_room_state or {})
+    assigned_role = get_member_audio_role(room_id, sid)
+    assigned_channel_mode = get_member_channel_mode(room_id, sid)
+    room_state['assigned_audio_role'] = assigned_role
+    room_state['assigned_channel_mode'] = assigned_channel_mode
+
+    queue = room_state.get('queue', [])
+    current_index = room_state.get('current_index', -1)
+
+    if isinstance(current_index, int) and 0 <= current_index < len(queue):
+        emit_data = audio_item_to_emit_data(queue[current_index])
+        resolved = resolve_emit_data_for_role(emit_data, assigned_role, assigned_channel_mode)
+        room_state['current_file'] = resolved.get('filename')
+        room_state['current_file_display'] = resolved.get('filename_display')
+        room_state['current_cover'] = resolved.get('cover')
+        room_state['current_title'] = resolved.get('title')
+        room_state['current_artist'] = resolved.get('artist')
+        room_state['current_album'] = resolved.get('album')
+        room_state['current_proxy_id'] = resolved.get('proxy_id')
+        room_state['current_is_stream'] = resolved.get('is_stream', False)
+        room_state['current_image_url'] = resolved.get('image_url')
+        room_state['current_video_id'] = resolved.get('video_id')
+        room_state['current_selected_audio_variant'] = resolved.get('selected_audio_variant')
+        room_state['current_is_stem_track'] = resolved.get('is_stem_track', False)
+        room_state['current_assigned_audio_role'] = resolved.get('assigned_audio_role')
+        room_state['current_assigned_channel_mode'] = resolved.get('assigned_channel_mode')
+        room_state['current_mix_filenames'] = resolved.get('mix_filenames')
+        room_state['current_mix_covers'] = resolved.get('mix_covers')
+
+    return room_state
 
 def extract_metadata(file_path):
     """
@@ -1362,7 +1686,9 @@ def add_to_queue():
                 'proxy_id': proxy_id,
                 'is_stream': True,
                 'image_url': image_url,
-                'video_id': video_id
+                'video_id': video_id,
+                'stems': None,
+                'is_stem_track': False
             }
             if 'queue' not in rooms_data[room]:
                 rooms_data[room]['queue'] = []
@@ -1395,9 +1721,11 @@ def add_to_queue():
                     'proxy_id': proxy_id,
                     'is_stream': True,
                     'image_url': image_url,
-                    'video_id': video_id
+                    'video_id': video_id,
+                    'stems': None,
+                    'is_stem_track': False
                 }
-                socketio.emit('new_file', emit_data, to=room)
+                emit_new_file_to_room(room, emit_data)
                 socketio.emit('pause', {'time': 0}, to=room)
             socketio.emit('queue_update', {
                 'queue': rooms_data[room]['queue'],
@@ -1433,20 +1761,10 @@ def upload():
         return jsonify({'success': False, 'error': 'File not allowed or not selected'}), 400
 
     try:
-        import re
         original_filename = file.filename
         if not original_filename:
             return jsonify({'success': False, 'error': 'Invalid filename'}), 400
-        
-        # Use a custom secure filename function that preserves Unicode characters
-        def unicode_secure_filename(filename):
-            # Remove path separators and other dangerous characters but keep Unicode
-            filename = re.sub(r'[/\\]', '', filename)  # Remove path separators
-            filename = re.sub(r'[<>:"|?*]', '', filename)  # Remove Windows forbidden chars
-            filename = filename.strip()  # Remove leading/trailing whitespace
-            filename = re.sub(r'\s+', ' ', filename)  # Normalize whitespace
-            return filename if filename else None
-        
+
         filename = unicode_secure_filename(original_filename)
         
         if not filename:  # If filename is still empty, generate a random one
@@ -1515,7 +1833,9 @@ def upload():
                 'album': client_album or metadata.get('album'),
                 'is_stream': False,
                 'image_url': client_image_url,
-                'video_id': client_video_id
+                'video_id': client_video_id,
+                'stems': None,
+                'is_stem_track': False
             }
             
             # Initialize queue if it doesn't exist
@@ -1540,6 +1860,7 @@ def upload():
                     'is_playing': False,
                     'last_progress_s': 0,
                     'last_updated_at': time.time(),
+                    'current_proxy_id': None,
                     'current_is_stream': False,
                     'current_image_url': client_image_url
                 })
@@ -1554,9 +1875,11 @@ def upload():
                     'album': audio_item.get('album'),
                     'is_stream': False,
                     'image_url': client_image_url,
-                    'video_id': client_video_id
+                    'video_id': client_video_id,
+                    'stems': None,
+                    'is_stem_track': False
                 }
-                socketio.emit('new_file', emit_data, to=room)
+                emit_new_file_to_room(room, emit_data)
                 socketio.emit('pause', {'time': 0}, to=room)
             
             # Always emit queue update
@@ -1575,10 +1898,160 @@ def upload():
         }), 500
 
 
+@app.route('/upload_stems', methods=['POST'])
+def upload_stems():
+    """Upload paired stems (vocals + instrumental) and enqueue as one synchronized track."""
+    room = request.form.get('room')
+
+    if not room or room not in rooms_data:
+        return jsonify({'success': False, 'error': 'Invalid or expired room'}), 400
+
+    vocals_file = request.files.get('vocals')
+    instrumental_file = request.files.get('instrumental')
+
+    if not vocals_file or not vocals_file.filename:
+        return jsonify({'success': False, 'error': 'Vocals file is required'}), 400
+    if not instrumental_file or not instrumental_file.filename:
+        return jsonify({'success': False, 'error': 'Instrumental file is required'}), 400
+
+    if not allowed_file(vocals_file.filename):
+        return jsonify({'success': False, 'error': 'Vocals file type is not allowed'}), 400
+    if not allowed_file(instrumental_file.filename):
+        return jsonify({'success': False, 'error': 'Instrumental file type is not allowed'}), 400
+
+    def save_stem_file(file_obj, role_tag):
+        original_name = file_obj.filename or f"{role_tag}_{uuid.uuid4().hex[:8]}.mp3"
+        safe_name = unicode_secure_filename(original_name)
+        if not safe_name:
+            safe_name = f"{role_tag}_{uuid.uuid4().hex[:8]}.mp3"
+
+        root, ext = os.path.splitext(safe_name)
+        ext = ext.lower() if ext else '.mp3'
+        candidate = unicode_secure_filename(f"{root}_{role_tag}{ext}") or f"{role_tag}_{uuid.uuid4().hex[:8]}{ext}"
+
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], candidate)
+        while os.path.exists(file_path):
+            candidate = unicode_secure_filename(f"{root}_{role_tag}_{uuid.uuid4().hex[:6]}{ext}") or f"{role_tag}_{uuid.uuid4().hex[:8]}{ext}"
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], candidate)
+
+        file_obj.save(file_path)
+
+        metadata = extract_metadata(file_path)
+        cover_filename = None
+        cover_data, cover_ext = extract_cover_art(file_path)
+        if cover_data:
+            cover_filename = f"{os.path.splitext(candidate)[0]}_cover.{cover_ext}"
+            cover_path = os.path.join(app.config['UPLOAD_FOLDER'], cover_filename)
+            with open(cover_path, 'wb') as imgf:
+                imgf.write(cover_data)
+
+        return {
+            'filename': candidate,
+            'cover': cover_filename,
+            'metadata': metadata,
+            'original_filename': original_name,
+        }
+
+    try:
+        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+        vocals_data = save_stem_file(vocals_file, AUDIO_ROLE_VOCALS)
+        instrumental_data = save_stem_file(instrumental_file, AUDIO_ROLE_INSTRUMENTAL)
+
+        client_title = request.form.get('title')
+        client_artist = request.form.get('artist')
+        client_album = request.form.get('album')
+
+        parsed_title = client_title or vocals_data['metadata'].get('title')
+        parsed_artist = client_artist or vocals_data['metadata'].get('artist')
+        parsed_album = client_album or vocals_data['metadata'].get('album') or instrumental_data['metadata'].get('album')
+
+        if not parsed_title:
+            base_name = os.path.splitext(vocals_data['original_filename'])[0]
+            base_name = re.sub(r'(?i)\b(vocal|vocals|instrumental|inst|karaoke|stem|stems)\b', '', base_name)
+            base_name = re.sub(r'[_-]+', ' ', base_name)
+            parsed_title = re.sub(r'\s+', ' ', base_name).strip() or 'Stem Track'
+
+        display_name = f"{parsed_title} (Stems)"
+        primary_cover = vocals_data['cover'] or instrumental_data['cover']
+
+        with thread_lock:
+            audio_item = {
+                # Canonical fallback file (used only when no role-specific stem is applicable)
+                'filename': vocals_data['filename'],
+                'filename_display': display_name,
+                'cover': primary_cover,
+                'upload_time': time.time(),
+                'title': parsed_title,
+                'artist': parsed_artist,
+                'album': parsed_album,
+                'is_stream': False,
+                'image_url': None,
+                'video_id': None,
+                'is_stem_track': True,
+                'stems': {
+                    AUDIO_ROLE_VOCALS: {
+                        'filename': vocals_data['filename'],
+                        'cover': vocals_data['cover']
+                    },
+                    AUDIO_ROLE_INSTRUMENTAL: {
+                        'filename': instrumental_data['filename'],
+                        'cover': instrumental_data['cover']
+                    }
+                }
+            }
+
+            if 'queue' not in rooms_data[room]:
+                rooms_data[room]['queue'] = []
+            if 'current_index' not in rooms_data[room]:
+                rooms_data[room]['current_index'] = -1
+
+            rooms_data[room]['queue'].append(audio_item)
+
+            if rooms_data[room]['current_file'] is None:
+                rooms_data[room]['current_index'] = len(rooms_data[room]['queue']) - 1
+                rooms_data[room].update({
+                    'current_file': vocals_data['filename'],
+                    'current_file_display': display_name,
+                    'current_cover': primary_cover,
+                    'current_title': parsed_title,
+                    'current_artist': parsed_artist,
+                    'current_album': parsed_album,
+                    'is_playing': False,
+                    'last_progress_s': 0,
+                    'last_updated_at': time.time(),
+                    'current_proxy_id': None,
+                    'current_is_stream': False,
+                    'current_image_url': None
+                })
+
+                emit_data = audio_item_to_emit_data(audio_item)
+                emit_new_file_to_room(room, emit_data)
+                socketio.emit('pause', {'time': 0}, to=room)
+
+            socketio.emit('queue_update', {
+                'queue': rooms_data[room]['queue'],
+                'current_index': rooms_data[room]['current_index']
+            }, to=room)
+
+        return jsonify({
+            'success': True,
+            'message': 'Stem track uploaded successfully',
+            'title': parsed_title,
+            'vocals_filename': vocals_data['filename'],
+            'instrumental_filename': instrumental_data['filename']
+        })
+
+    except Exception as e:
+        print(f"ERROR during stem upload for room '{room}': {str(e)}")
+        return jsonify({'success': False, 'error': f'Stem upload failed: {str(e)}'}), 500
+
+
 @app.route('/current_song')
 def get_current_song():
     """Endpoint for new clients to get the currently loaded song."""
     room = request.args.get('room')
+    sid = request.args.get('sid')
     if room and room in rooms_data:
         with thread_lock:
             room_data = rooms_data[room].copy()
@@ -1589,6 +2062,8 @@ def get_current_song():
                 room_data['current_artist'] = None
             if 'current_album' not in room_data:
                 room_data['current_album'] = None
+            if sid:
+                room_data = build_room_state_for_member(room, sid, room_data)
             return jsonify(room_data)
     return jsonify({'filename': None, 'cover': None, 'title': None, 'artist': None, 'album': None})
 
@@ -1635,21 +2110,9 @@ def play_from_queue(room_id, index):
             'current_image_url': audio_item.get('image_url')
         })
     
-    # Emit new song to all clients
-    emit_data = {
-        'filename': audio_item.get('filename'),
-        'filename_display': audio_item.get('filename_display'),
-        'cover': audio_item.get('cover'),
-        'title': audio_item.get('title'),
-        'artist': audio_item.get('artist'),
-        'album': audio_item.get('album'),
-        # stream fields
-        'proxy_id': audio_item.get('proxy_id'),
-        'is_stream': audio_item.get('is_stream', False),
-        'image_url': audio_item.get('image_url'),
-        'video_id': audio_item.get('video_id')
-    }
-    socketio.emit('new_file', emit_data, to=room_id)
+    # Emit new song to all clients (role-aware for stem tracks)
+    emit_data = audio_item_to_emit_data(audio_item)
+    emit_new_file_to_room(room_id, emit_data)
     
     # Ensure playback starts immediately
     socketio.emit('play', {'room': room_id}, to=room_id)
@@ -1694,14 +2157,20 @@ def remove_from_queue(room_id, index):
                     'is_playing': False,
                     'last_progress_s': 0,
                 })
-                socketio.emit('new_file', {
-                    'filename': None, 
-                    'filename_display': None, 
+                emit_new_file_to_room(room_id, {
+                    'filename': None,
+                    'filename_display': None,
                     'cover': None,
                     'title': None,
                     'artist': None,
-                    'album': None
-                }, to=room_id)
+                    'album': None,
+                    'proxy_id': None,
+                    'is_stream': False,
+                    'image_url': None,
+                    'video_id': None,
+                    'stems': None,
+                    'is_stem_track': False
+                })
             elif index < len(queue):
                 # Play the next song (which is now at the same index)
                 audio_item = queue[index]
@@ -1716,14 +2185,7 @@ def remove_from_queue(room_id, index):
                     'is_playing': False,
                     'last_progress_s': 0,
                 })
-                socketio.emit('new_file', {
-                    'filename': audio_item['filename'],
-                    'filename_display': audio_item['filename_display'],
-                    'cover': audio_item['cover'],
-                    'title': audio_item.get('title'),
-                    'artist': audio_item.get('artist'),
-                    'album': audio_item.get('album')
-                }, to=room_id)
+                emit_new_file_to_room(room_id, audio_item_to_emit_data(audio_item))
             else:
                 # Play the previous song (index decreased by 1)
                 new_index = index - 1
@@ -1739,14 +2201,7 @@ def remove_from_queue(room_id, index):
                     'is_playing': False,
                     'last_progress_s': 0,
                 })
-                socketio.emit('new_file', {
-                    'filename': audio_item['filename'],
-                    'filename_display': audio_item['filename_display'],
-                    'cover': audio_item['cover'],
-                    'title': audio_item.get('title'),
-                    'artist': audio_item.get('artist'),
-                    'album': audio_item.get('album')
-                }, to=room_id)
+                emit_new_file_to_room(room_id, audio_item_to_emit_data(audio_item))
         elif index < current_index:
             # Adjust current_index down by 1
             rooms_data[room_id]['current_index'] = current_index - 1
@@ -1821,9 +2276,13 @@ def create_room():
         'last_progress_s': 0,
         'last_updated_at': time.time(),
         'members': 0,  # Initialize member count
+        'host_id': None,
         'member_list': {},  # Store detailed member information
         'queue': [],  # Initialize queue for multiple audio files
         'current_index': -1,  # Index of currently playing song in queue
+        'current_proxy_id': None,
+        'current_is_stream': False,
+        'current_image_url': None,
         'is_shuffling': False,  # Shuffle state
         'isLooping': False  # Loop state synchronized across devices
     }
@@ -1874,7 +2333,7 @@ def on_join(data):
             # Check if this is the first member (becomes host)
             is_host = len(rooms_data[room]['member_list']) == 0
             if is_host:
-                rooms_data[room]['host_id'] = session_id
+                rooms_data[room]['host_id'] = request.sid
             
             # Add member to the list
             device_info = data.get('deviceInfo', {})
@@ -1894,7 +2353,13 @@ def on_join(data):
                 'os': os,
                 'deviceType': device_type,
                 'joinTime': time.time() * 1000,  # JavaScript timestamp
-                'is_host': is_host
+                'is_host': is_host,
+                'audio_role': AUDIO_ROLE_MIX,
+                'channel_mode': CHANNEL_MODE_STEREO,
+                'reported_playback_time_s': None,
+                'reported_is_playing': False,
+                'reported_has_media': False,
+                'reported_at_s': None
             }
             rooms_data[room]['member_list'][request.sid] = member_info
             rooms_data[room]['members'] += 1
@@ -1904,6 +2369,8 @@ def on_join(data):
             if room_state['is_playing']:
                 time_since_update = time.time() - room_state['last_updated_at']
                 room_state['last_progress_s'] += time_since_update
+
+            room_state = build_room_state_for_member(room, request.sid, room_state)
             
             print(f"[DEBUG] Sending room_state with filename: {repr(room_state.get('current_file'))}")
             print(f"[DEBUG] Sending room_state with display filename: {repr(room_state.get('current_file_display'))}")
@@ -1920,9 +2387,6 @@ def on_join(data):
                 'count': member_count}, to=room)
             
             # Broadcast member list update to all clients in the room
-            socketio.emit('member_list_update', {
-                'members': list(rooms_data[room].get('member_list', {}).values())
-            }, to=room)
             socketio.emit('member_list_update', {
                 'members': list(rooms_data[room].get('member_list', {}).values())
             }, to=room)
@@ -1979,18 +2443,19 @@ def on_disconnect():
                         'members': list(rooms_data[room_id].get('member_list', {}).values())
                     }, to=room_id)
                     if new_count == 0:
-                         print(f"Room {room_id} is now empty, cleaning up")
-                         # Reset room state but keep the room for potential rejoins
-                         rooms_data[room_id]['is_playing'] = False
-                         rooms_data[room_id]['current_file'] = None
-                         rooms_data[room_id]['current_file_display'] = None
-                         rooms_data[room_id]['current_cover'] = None
-                         # Clear the queue when room is empty
-                         rooms_data[room_id]['queue'] = []
-                         rooms_data[room_id]['current_index'] = -1
-                         # Reset shuffle and loop states
-                         rooms_data[room_id]['is_shuffling'] = False
-                         rooms_data[room_id]['isLooping'] = False
+                        print(f"Room {room_id} is now empty, cleaning up")
+                        # Reset room state but keep the room for potential rejoins
+                        rooms_data[room_id]['host_id'] = None
+                        rooms_data[room_id]['is_playing'] = False
+                        rooms_data[room_id]['current_file'] = None
+                        rooms_data[room_id]['current_file_display'] = None
+                        rooms_data[room_id]['current_cover'] = None
+                        # Clear the queue when room is empty
+                        rooms_data[room_id]['queue'] = []
+                        rooms_data[room_id]['current_index'] = -1
+                        # Reset shuffle and loop states
+                        rooms_data[room_id]['is_shuffling'] = False
+                        rooms_data[room_id]['isLooping'] = False
 
 @socketio.on('remove_from_queue')
 def handle_remove_from_queue(data):
@@ -2048,18 +2513,9 @@ def handle_remove_from_queue(data):
                     'current_image_url': audio_item.get('image_url')
                 })
                 
-                socketio.emit('new_file', {
-                    'filename': audio_item.get('filename'),
-                    'filename_display': audio_item.get('filename_display'),
-                    'cover': audio_item.get('cover'),
-                    'title': audio_item.get('title'),
-                    'artist': audio_item.get('artist'),
-                    'album': audio_item.get('album'),
-                    'is_playing': True,
-                    'proxy_id': audio_item.get('proxy_id'),
-                    'is_stream': audio_item.get('is_stream', False),
-                    'image_url': audio_item.get('image_url')
-                }, to=room_id)
+                emit_data = audio_item_to_emit_data(audio_item)
+                emit_data['is_playing'] = True
+                emit_new_file_to_room(room_id, emit_data)
                 
                 # Ensure playback starts
                 socketio.emit('play', {'room': room_id}, to=room_id)
@@ -2151,6 +2607,36 @@ def handle_sync(data):
             'target_timestamp': target_timestamp
         }, to=room)
 
+@socketio.on('member_playback_heartbeat')
+def handle_member_playback_heartbeat(data):
+    """Store per-member local playback telemetry used for drift display."""
+    room = data.get('room') if isinstance(data, dict) else None
+    if room not in rooms_data:
+        return
+
+    with thread_lock:
+        room_state = rooms_data.get(room)
+        if not room_state:
+            return
+
+        member_list = room_state.get('member_list', {})
+        member = member_list.get(request.sid)
+        if not member:
+            return
+
+        try:
+            reported_time = float(data.get('current_time', 0) or 0)
+        except (TypeError, ValueError):
+            return
+
+        if reported_time < 0:
+            reported_time = 0.0
+
+        member['reported_playback_time_s'] = reported_time
+        member['reported_is_playing'] = bool(data.get('is_playing', False))
+        member['reported_has_media'] = bool(data.get('has_media', False))
+        member['reported_at_s'] = time.time()
+
 @socketio.on('next_song')
 def handle_next_song(data):
     """Play the next song in the queue, considering shuffle mode."""
@@ -2195,19 +2681,8 @@ def handle_next_song(data):
             'current_image_url': audio_item.get('image_url')
         })
 
-    emit_data = {
-        'filename': audio_item.get('filename'),
-        'filename_display': audio_item.get('filename_display'),
-        'cover': audio_item.get('cover'),
-        'title': audio_item.get('title'),
-        'artist': audio_item.get('artist'),
-        'album': audio_item.get('album'),
-        'proxy_id': audio_item.get('proxy_id'),
-        'is_stream': audio_item.get('is_stream', False),
-        'image_url': audio_item.get('image_url'),
-        'video_id': audio_item.get('video_id')
-    }
-    socketio.emit('new_file', emit_data, to=room)
+    emit_data = audio_item_to_emit_data(audio_item)
+    emit_new_file_to_room(room, emit_data)
 
     # Always auto-play
     target_timestamp = time.time() + 0.5
@@ -2258,19 +2733,8 @@ def handle_previous_song(data):
             'current_image_url': audio_item.get('image_url')
         })
 
-    emit_data = {
-        'filename': audio_item.get('filename'),
-        'filename_display': audio_item.get('filename_display'),
-        'cover': audio_item.get('cover'),
-        'title': audio_item.get('title'),
-        'artist': audio_item.get('artist'),
-        'album': audio_item.get('album'),
-        'proxy_id': audio_item.get('proxy_id'),
-        'is_stream': audio_item.get('is_stream', False),
-        'image_url': audio_item.get('image_url'),
-        'video_id': audio_item.get('video_id')
-    }
-    socketio.emit('new_file', emit_data, to=room)
+    emit_data = audio_item_to_emit_data(audio_item)
+    emit_new_file_to_room(room, emit_data)
 
     # Always auto-play
     target_timestamp = time.time() + 0.5
@@ -2317,19 +2781,8 @@ def handle_select_song(data):
             'current_image_url': audio_item.get('image_url')
         })
 
-    emit_data = {
-        'filename': audio_item.get('filename'),
-        'filename_display': audio_item.get('filename_display'),
-        'cover': audio_item.get('cover'),
-        'title': audio_item.get('title'),
-        'artist': audio_item.get('artist'),
-        'album': audio_item.get('album'),
-        'proxy_id': audio_item.get('proxy_id'),
-        'is_stream': audio_item.get('is_stream', False),
-        'image_url': audio_item.get('image_url'),
-        'video_id': audio_item.get('video_id')
-    }
-    socketio.emit('new_file', emit_data, to=room)
+    emit_data = audio_item_to_emit_data(audio_item)
+    emit_new_file_to_room(room, emit_data)
     
     # Ensure playback starts immediately
     socketio.emit('play', {'room': room}, to=room)
@@ -2444,15 +2897,8 @@ def handle_shuffle_next(data):
     print(f"[Room {room}] Shuffle: Playing random song at index {random_index}")
     
     # Emit new song to all clients
-    emit_data = {
-        'filename': audio_item['filename'],
-        'filename_display': audio_item['filename_display'],
-        'cover': audio_item['cover'],
-        'title': audio_item.get('title'),
-        'artist': audio_item.get('artist'),
-        'album': audio_item.get('album')
-    }
-    socketio.emit('new_file', emit_data, to=room)
+    emit_data = audio_item_to_emit_data(audio_item)
+    emit_new_file_to_room(room, emit_data)
     
     if auto_play:
         # If auto-playing, start playback immediately
@@ -2472,6 +2918,218 @@ def handle_shuffle_next(data):
     }, to=room)
 
 
+@socketio.on('set_member_role')
+def handle_set_member_role(data):
+    """Assign per-device audio role (mix, vocals, instrumental). Host only."""
+    room = data.get('room')
+    target_sid = data.get('target_sid')
+    requested_role = normalize_audio_role(data.get('role'))
+
+    if room not in rooms_data:
+        emit('error', {'message': 'Room not found.'})
+        return
+
+    if not target_sid:
+        emit('error', {'message': 'target_sid is required.'})
+        return
+
+    with thread_lock:
+        room_state = rooms_data[room]
+
+        if room_state.get('host_id') != request.sid:
+            emit('error', {'message': 'Only the host can assign audio roles.'})
+            return
+
+        member_list = room_state.get('member_list', {})
+        if target_sid not in member_list:
+            emit('error', {'message': 'Member not found in this room.'})
+            return
+
+        member_list[target_sid]['audio_role'] = requested_role
+        members_snapshot = list(member_list.values())
+
+        queue = room_state.get('queue', [])
+        current_index = room_state.get('current_index', -1)
+        current_audio_item = None
+        if isinstance(current_index, int) and 0 <= current_index < len(queue):
+            current_audio_item = queue[current_index]
+
+        # Compute current timeline to keep reassigned device in sync.
+        current_time = room_state.get('last_progress_s', 0)
+        if room_state.get('is_playing'):
+            current_time += max(0, time.time() - room_state.get('last_updated_at', time.time()))
+        is_playing_now = room_state.get('is_playing', False)
+
+    socketio.emit('member_list_update', {'members': members_snapshot}, to=room)
+
+    if current_audio_item:
+        emit_data = audio_item_to_emit_data(current_audio_item)
+        emit_new_file_to_member(room, target_sid, emit_data)
+
+        if is_playing_now:
+            socketio.emit('scheduled_play', {
+                'audio_time': current_time,
+                'target_timestamp': time.time() + 0.35
+            }, to=target_sid)
+        else:
+            socketio.emit('pause', {'time': current_time}, to=target_sid)
+
+
+@socketio.on('set_member_channel_mode')
+def handle_set_member_channel_mode(data):
+    """Assign per-device channel mode (stereo, left, right). Host only."""
+    room = data.get('room')
+    target_sid = data.get('target_sid')
+    requested_mode = normalize_channel_mode(data.get('channel_mode'))
+
+    if room not in rooms_data:
+        emit('error', {'message': 'Room not found.'})
+        return {'success': False, 'error': 'Room not found.'}
+
+    if not target_sid:
+        emit('error', {'message': 'target_sid is required.'})
+        return {'success': False, 'error': 'target_sid is required.'}
+
+    with thread_lock:
+        room_state = rooms_data[room]
+
+        if room_state.get('host_id') != request.sid:
+            emit('error', {'message': 'Only the host can assign channel mode.'})
+            return {'success': False, 'error': 'Only the host can assign channel mode.'}
+
+        member_list = room_state.get('member_list', {})
+        if target_sid not in member_list:
+            emit('error', {'message': 'Member not found in this room.'})
+            return {'success': False, 'error': 'Member not found in this room.'}
+
+        member_list[target_sid]['channel_mode'] = requested_mode
+        members_snapshot = list(member_list.values())
+
+        queue = room_state.get('queue', [])
+        current_index = room_state.get('current_index', -1)
+        current_audio_item = None
+        if isinstance(current_index, int) and 0 <= current_index < len(queue):
+            current_audio_item = queue[current_index]
+
+        # Compute current timeline to keep reassigned device in sync.
+        current_time = room_state.get('last_progress_s', 0)
+        if room_state.get('is_playing'):
+            current_time += max(0, time.time() - room_state.get('last_updated_at', time.time()))
+        is_playing_now = room_state.get('is_playing', False)
+
+    socketio.emit('member_list_update', {'members': members_snapshot}, to=room)
+
+    # Apply channel mode immediately on the target client even if there is no current track.
+    socketio.emit('channel_mode_update', {
+        'channel_mode': requested_mode,
+        'target_sid': target_sid
+    }, to=target_sid)
+
+    if current_audio_item:
+        emit_data = audio_item_to_emit_data(current_audio_item)
+        emit_new_file_to_member(room, target_sid, emit_data)
+
+        if is_playing_now:
+            socketio.emit('scheduled_play', {
+                'audio_time': current_time,
+                'target_timestamp': time.time() + 0.35
+            }, to=target_sid)
+        else:
+            socketio.emit('pause', {'time': current_time}, to=target_sid)
+
+    return {
+        'success': True,
+        'room': room,
+        'target_sid': target_sid,
+        'channel_mode': requested_mode,
+        'has_current_audio': bool(current_audio_item),
+        'is_playing_now': is_playing_now
+    }
+
+
+@app.route('/set_member_channel_mode', methods=['POST'])
+def set_member_channel_mode_http():
+    """HTTP fallback for channel mode assignment when socket ack path is unavailable."""
+    data = request.get_json(silent=True) or {}
+    room = data.get('room')
+    target_sid = data.get('target_sid')
+    requested_mode = normalize_channel_mode(data.get('channel_mode'))
+    actor_sid = data.get('actor_sid')
+
+    if room not in rooms_data:
+        # In deployments with multiple workers, in-memory room state may not be
+        # present in this worker. Apply best-effort direct update to target sid.
+        socketio.emit('channel_mode_update', {
+            'channel_mode': requested_mode,
+            'target_sid': target_sid,
+            'source': 'http-fallback-room-miss'
+        }, to=target_sid)
+        return jsonify({
+            'success': True,
+            'degraded': True,
+            'warning': 'Room not found in this worker; sent best-effort direct channel update.',
+            'room': room,
+            'target_sid': target_sid,
+            'channel_mode': requested_mode
+        })
+    if not target_sid:
+        return jsonify({'success': False, 'error': 'target_sid is required.'}), 400
+    if not actor_sid:
+        return jsonify({'success': False, 'error': 'actor_sid is required.'}), 400
+
+    with thread_lock:
+        room_state = rooms_data[room]
+
+        if room_state.get('host_id') != actor_sid:
+            return jsonify({'success': False, 'error': 'Only the host can assign channel mode.'}), 403
+
+        member_list = room_state.get('member_list', {})
+        if target_sid not in member_list:
+            return jsonify({'success': False, 'error': 'Member not found in this room.'}), 404
+
+        member_list[target_sid]['channel_mode'] = requested_mode
+        members_snapshot = list(member_list.values())
+
+        queue = room_state.get('queue', [])
+        current_index = room_state.get('current_index', -1)
+        current_audio_item = None
+        if isinstance(current_index, int) and 0 <= current_index < len(queue):
+            current_audio_item = queue[current_index]
+
+        current_time = room_state.get('last_progress_s', 0)
+        if room_state.get('is_playing'):
+            current_time += max(0, time.time() - room_state.get('last_updated_at', time.time()))
+        is_playing_now = room_state.get('is_playing', False)
+
+    socketio.emit('member_list_update', {'members': members_snapshot}, to=room)
+    socketio.emit('channel_mode_update', {
+        'channel_mode': requested_mode,
+        'target_sid': target_sid,
+        'source': 'http-fallback'
+    }, to=target_sid)
+
+    if current_audio_item:
+        emit_data = audio_item_to_emit_data(current_audio_item)
+        emit_new_file_to_member(room, target_sid, emit_data)
+
+        if is_playing_now:
+            socketio.emit('scheduled_play', {
+                'audio_time': current_time,
+                'target_timestamp': time.time() + 0.35
+            }, to=target_sid)
+        else:
+            socketio.emit('pause', {'time': current_time}, to=target_sid)
+
+    return jsonify({
+        'success': True,
+        'room': room,
+        'target_sid': target_sid,
+        'channel_mode': requested_mode,
+        'has_current_audio': bool(current_audio_item),
+        'is_playing_now': is_playing_now
+    })
+
+
 @socketio.on('request_member_list')
 def handle_request_member_list(data):
     """Handle request for member list"""
@@ -2479,9 +3137,28 @@ def handle_request_member_list(data):
     print(f"[DEBUG] request_member_list received for room: {room}")
     if room in rooms_data:
         with thread_lock:
-            member_list = list(rooms_data[room].get('member_list', {}).values())
-            print(f"[DEBUG] Found {len(member_list)} members: {member_list}")
-            emit('member_list_update', {'members': member_list})
+            room_state = rooms_data[room]
+            now_ts = time.time()
+
+            members_with_drift = []
+            for member in room_state.get('member_list', {}).values():
+                snapshot = dict(member)
+                drift_ms = compute_member_sync_drift_ms(room_state, member, now_ts=now_ts)
+                snapshot['sync_drift_ms'] = drift_ms
+
+                reported_at_s = member.get('reported_at_s')
+                if reported_at_s is None:
+                    snapshot['sync_report_age_ms'] = None
+                else:
+                    try:
+                        snapshot['sync_report_age_ms'] = int(max(0, round((now_ts - float(reported_at_s)) * 1000)))
+                    except (TypeError, ValueError):
+                        snapshot['sync_report_age_ms'] = None
+
+                members_with_drift.append(snapshot)
+
+            print(f"[DEBUG] Found {len(members_with_drift)} members")
+            emit('member_list_update', {'members': members_with_drift})
     else:
         print(f"[DEBUG] Room {room} not found in rooms_data")
         emit('member_list_update', {'members': []})
