@@ -1696,6 +1696,20 @@ body.fullscreen-mode.lyrics-active .main-header {
     gap: 0.5rem;
 }
 
+.sidebar-upload-btn + .sidebar-upload-btn {
+    margin-top: 0.5rem;
+}
+
+.stem-upload-btn {
+    border-color: rgba(120, 200, 255, 0.35);
+    color: rgba(170, 220, 255, 0.95);
+}
+
+.stem-upload-btn:hover {
+    border-color: rgba(120, 200, 255, 0.6);
+    color: rgba(210, 240, 255, 1);
+}
+
 /* Hide sidebar on mobile */
 @media (max-width: 1024px) {
     .members-sidebar {
@@ -2124,6 +2138,67 @@ body.fullscreen-mode.lyrics-active .main-header {
 
 .member-status.online {
     color: #4ade80;
+}
+
+.member-sync-drift {
+    font-size: 0.72rem;
+    text-align: left;
+    align-self: flex-start;
+    margin-top: 0.05rem;
+    line-height: 1.2;
+}
+
+/* Smaller drift text for PC */
+@media (min-width: 1024px) {
+    .member-sync-drift {
+        font-size: 0.64rem;
+    }
+}
+
+.member-sync-drift-good {
+    color: #4ade80;
+}
+
+.member-sync-drift-warn {
+    color: #facc15;
+}
+
+.member-sync-drift-bad {
+    color: #fb7185;
+}
+
+.member-sync-drift-unknown {
+    color: rgba(255, 255, 255, 0.48);
+}
+
+.member-role-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin-top: 0.2rem;
+}
+
+.member-role-label {
+    font-size: 0.68rem;
+    color: rgba(255, 255, 255, 0.6);
+    min-width: 34px;
+}
+
+.member-role-select {
+    flex: 1;
+    min-width: 0;
+    padding: 0.22rem 0.4rem;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(20, 20, 22, 0.75);
+    color: rgba(255, 255, 255, 0.92);
+    font-size: 0.7rem;
+}
+
+.member-role-select:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
 }
 
 .loading-members, .no-members {
