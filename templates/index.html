@@ -35,7 +35,12 @@
             <button id="upload-btn" class="control-button sidebar-upload-btn">
                 <i class="fas fa-upload"></i> Upload
             </button>
+            <button id="upload-stems-btn" class="control-button sidebar-upload-btn stem-upload-btn" title="Upload vocals + instrumental pair">
+                <i class="fas fa-layer-group"></i> Upload Stems
+            </button>
             <input type="file" id="audio-input" accept=".mp3,.wav,.ogg,.flac,.m4a" style="display: none;">
+            <input type="file" id="vocals-input" accept=".mp3,.wav,.ogg,.flac,.m4a" style="display: none;">
+            <input type="file" id="instrumental-input" accept=".mp3,.wav,.ogg,.flac,.m4a" style="display: none;">
         </div>
     </div>
     
@@ -328,6 +333,21 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/color-thief/2.3.2/color-thief.umd.js"></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="/static/script.js"></script>
+    
+    <!-- AudioFlow Modular JavaScript -->
+    <script src="/static/js/config.js"></script>
+    <script src="/static/js/utils.js"></script>
+    <script src="/static/js/audio-visualizer.js"></script>
+    <script src="/static/js/player.js"></script>
+    <script src="/static/js/theme.js"></script>
+    <script src="/static/js/queue.js"></script>
+    <script src="/static/js/lyrics.js"></script>
+    <script src="/static/js/fullscreen.js"></script>
+    <script src="/static/js/upload.js"></script>
+    <script src="/static/js/search.js"></script>
+    <script src="/static/js/members.js"></script>
+    <script src="/static/js/socket-handlers.js"></script>
+    <script src="/static/js/main.js"></script>
+    
 </body>
 </html>
